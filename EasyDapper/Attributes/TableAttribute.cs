@@ -6,10 +6,12 @@ namespace EasyDapper.Attributes
     public class TableAttribute : Attribute
     {
         public string TableName { get; }
+        public string Schema { get; }
 
-        public TableAttribute(string tableName)
+        public TableAttribute(string tableName, string schema = null)
         {
             TableName = tableName;
+            Schema = schema;
         }
     }
 }

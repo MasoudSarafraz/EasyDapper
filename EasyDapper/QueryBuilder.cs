@@ -12,18 +12,24 @@ using EasyDapper.Interfaces;
 
 namespace EasyDapper.Implementations
 {
-    internal class QueryBuilder<T> : IQueryBuilder<T>
+
+    internal sealed class QueryBuilder<T> : IQueryBuilder<T>
     {
         private readonly string _connectionString;
         private readonly List<string> _filters = new List<string>();
+        private readonly Dictionary<string, object> _parameters = new Dictionary<string, object>();
 
         public QueryBuilder(string connectionString)
         {
-            _connectionString = connectionString;
+            _connectionString = connectionString ?? throw new ArgumentNullException(nameof(connectionString));
         }
 
         public IQueryBuilder<T> Where(Expression<Func<T, bool>> filter)
         {
+            if (filter == null)
+            {
+                throw new ArgumentNullException(nameof(filter));
+            }                
             var expression = ParseExpression(filter.Body);
             _filters.Add(expression);
             return this;
@@ -34,7 +40,7 @@ namespace EasyDapper.Implementations
             var query = BuildQuery();
             using (var connection = new SqlConnection(_connectionString))
             {
-                return connection.Query<T>(query);
+                return connection.Query<T>(query, _parameters);
             }
         }
 
@@ -43,145 +49,209 @@ namespace EasyDapper.Implementations
             var query = BuildQuery();
             using (var connection = new SqlConnection(_connectionString))
             {
-                await connection.OpenAsync();
-                return await connection.QueryAsync<T>(query);
+                return await connection.QueryAsync<T>(query, _parameters);
             }
         }
 
         private string BuildQuery()
         {
-            var tableName = GetTableName<T>();
+            var tableName = GetTableName();
+            var columns = GetColumns();
             var whereClause = _filters.Any() ? "WHERE " + string.Join(" AND ", _filters) : "";
-            return $"SELECT * FROM {tableName} {whereClause}";
+            return $"SELECT {columns} FROM {tableName} {whereClause}";
         }
 
         private string ParseExpression(Expression expression)
         {
             switch (expression.NodeType)
             {
-                // Comparison Operators
                 case ExpressionType.Equal:
-                    if (expression is BinaryExpression binaryExpression && IsNullConstant(binaryExpression.Right))
-                    {
-                        return $"{ParseMemberExpression(binaryExpression.Left)} IS NULL";
-                    }
-                    return ParseBinaryExpression((BinaryExpression)expression, "=");
+                    return HandleEqual((BinaryExpression)expression);
                 case ExpressionType.NotEqual:
-                    if (expression is BinaryExpression binaryExpressionNotEqual && IsNullConstant(binaryExpressionNotEqual.Right))
-                    {
-                        return $"{ParseMemberExpression(binaryExpressionNotEqual.Left)} IS NOT NULL";
-                    }
-                    return ParseBinaryExpression((BinaryExpression)expression, "<>");
+                    return HandleNotEqual((BinaryExpression)expression);
                 case ExpressionType.GreaterThan:
-                    return ParseBinaryExpression((BinaryExpression)expression, ">");
+                    return HandleBinary((BinaryExpression)expression, ">");
                 case ExpressionType.LessThan:
-                    return ParseBinaryExpression((BinaryExpression)expression, "<");
+                    return HandleBinary((BinaryExpression)expression, "<");
                 case ExpressionType.GreaterThanOrEqual:
-                    return ParseBinaryExpression((BinaryExpression)expression, ">=");
+                    return HandleBinary((BinaryExpression)expression, ">=");
                 case ExpressionType.LessThanOrEqual:
-                    return ParseBinaryExpression((BinaryExpression)expression, "<=");
-
-                // Logical Operators
+                    return HandleBinary((BinaryExpression)expression, "<=");
                 case ExpressionType.AndAlso:
-                    var leftAnd = ParseExpression(((BinaryExpression)expression).Left);
-                    var rightAnd = ParseExpression(((BinaryExpression)expression).Right);
-                    return $"({leftAnd} AND {rightAnd})";
+                    return HandleAnd((BinaryExpression)expression);
                 case ExpressionType.OrElse:
-                    var leftOr = ParseExpression(((BinaryExpression)expression).Left);
-                    var rightOr = ParseExpression(((BinaryExpression)expression).Right);
-                    return $"({leftOr} OR {rightOr})";
-
-                // Method Calls (LIKE, IN, BETWEEN, etc.)
-                case ExpressionType.Call when ((MethodCallExpression)expression).Method.Name == "StartsWith":
-                    return ParseMethodCallExpression((MethodCallExpression)expression, "LIKE", "%");
-                case ExpressionType.Call when ((MethodCallExpression)expression).Method.Name == "EndsWith":
-                    return ParseMethodCallExpression((MethodCallExpression)expression, "LIKE", "%");
-                case ExpressionType.Call when ((MethodCallExpression)expression).Method.Name == "Contains":
-                    if (((MethodCallExpression)expression).Arguments[0] is NewArrayExpression)
-                        return ParseInExpression((MethodCallExpression)expression);
-                    else
-                        return ParseMethodCallExpression((MethodCallExpression)expression, "LIKE", "%", "%");
-                case ExpressionType.Call when ((MethodCallExpression)expression).Method.Name == "IsNullOrEmpty":
-                    return ParseIsNullOrEmptyExpression((MethodCallExpression)expression);
-                case ExpressionType.Call when ((MethodCallExpression)expression).Method.Name == "Between":
-                    return ParseBetweenExpression((MethodCallExpression)expression);
-
+                    return HandleOr((BinaryExpression)expression);
+                case ExpressionType.Call:
+                    return HandleMethodCall((MethodCallExpression)expression);
                 default:
                     throw new NotSupportedException($"Expression type '{expression.NodeType}' is not supported.");
             }
         }
 
-        private string ParseBinaryExpression(BinaryExpression expression, string @operator)
+        private string HandleEqual(BinaryExpression expression)
         {
-            var propertyName = ParseMemberExpression(expression.Left);
-            var value = ParseValueExpression(expression.Right);
-            return $"{propertyName} {@operator} {value}";
+            if (IsNullConstant(expression.Right))
+                return $"{ParseMember(expression.Left)} IS NULL";
+            return HandleBinary(expression, "=");
         }
 
-        private string ParseMethodCallExpression(MethodCallExpression expression, string @operator, string prefix = "", string suffix = "")
+        private string HandleNotEqual(BinaryExpression expression)
         {
-            var propertyName = ParseMemberExpression(expression.Object);
-            var value = ParseValueExpression(expression.Arguments[0]);
-            return $"{propertyName} {@operator} '{prefix}{value}{suffix}'";
+            if (IsNullConstant(expression.Right))
+                return $"{ParseMember(expression.Left)} IS NOT NULL";
+            return HandleBinary(expression, "<>");
         }
 
-        private string ParseInExpression(MethodCallExpression expression)
+        private string HandleBinary(BinaryExpression expression, string op)
         {
-            var propertyName = ParseMemberExpression(expression.Arguments[1]);
-            var values = (IEnumerable<object>)Expression.Lambda(expression.Arguments[0]).Compile().DynamicInvoke();
-            var formattedValues = string.Join(", ", values.Select(v => $"'{v}'"));
-            return $"{propertyName} IN ({formattedValues})";
+            var left = ParseMember(expression.Left);
+            var right = ParseValue(expression.Right);
+            return $"{left} {op} {right}";
         }
 
-        private string ParseIsNullOrEmptyExpression(MethodCallExpression expression)
+        private string HandleAnd(BinaryExpression expression)
         {
-            var propertyName = ParseMemberExpression(expression.Arguments[0]);
-            return $"{propertyName} IS NULL OR {propertyName} = ''";
+            return Combine(expression.Left, expression.Right, "AND");
         }
 
-        private string ParseBetweenExpression(MethodCallExpression expression)
+        private string HandleOr(BinaryExpression expression)
         {
-            var propertyName = ParseMemberExpression(expression.Arguments[0]);
-            var lowerBound = ParseValueExpression(expression.Arguments[1]);
-            var upperBound = ParseValueExpression(expression.Arguments[2]);
-            return $"{propertyName} BETWEEN {lowerBound} AND {upperBound}";
+            return Combine(expression.Left, expression.Right, "OR");
         }
 
-        private string ParseMemberExpression(Expression expression)
+        private string Combine(Expression left, Expression right, string op)
         {
-            if (expression is MemberExpression memberExpression)
+            return $"({ParseExpression(left)} {op} {ParseExpression(right)})";
+        }
+
+        private string HandleMethodCall(MethodCallExpression expression)
+        {
+            switch (expression.Method.Name)
             {
-                var propertyInfo = memberExpression.Member as PropertyInfo;
-                return GetColumnName(propertyInfo);
+                case "StartsWith":
+                    return HandleStartsWith(expression);
+                case "EndsWith":
+                    return HandleEndsWith(expression);
+                case "Contains":
+                    return HandleContains(expression);
+                case "IsNullOrEmpty":
+                    return HandleIsNullOrEmpty(expression);
+                case "Between":
+                    return HandleBetween(expression);
+                default:
+                    throw new NotSupportedException($"Method '{expression.Method.Name}' is not supported.");
             }
+
+        }
+
+        private string HandleStartsWith(MethodCallExpression expression)
+        {
+            return HandleLike(expression, "{0}%");
+        }
+
+        private string HandleEndsWith(MethodCallExpression expression)
+        {
+            return HandleLike(expression, "%{0}");
+        }
+
+        private string HandleContains(MethodCallExpression expression)
+        {
+            if (expression.Arguments[0] is NewArrayExpression)
+            {
+                return HandleIn(expression);
+            }                
+            return HandleLike(expression, "%{0}%");
+        }
+
+        private string HandleLike(MethodCallExpression expression, string format)
+        {
+            var property = ParseMember(expression.Object);
+            var value = ParseValue(expression.Arguments[0], format);
+            return $"{property} LIKE {value}";
+        }
+
+        private string HandleIn(MethodCallExpression expression)
+        {
+            var property = ParseMember(expression.Arguments[1]);
+            var values = (IEnumerable<object>)Expression.Lambda(expression.Arguments[0]).Compile().DynamicInvoke();
+            var parameters = values.Select(v => ParseValue(Expression.Constant(v))).ToList();
+            return $"{property} IN ({string.Join(", ", parameters)})";
+        }
+
+        private string HandleIsNullOrEmpty(MethodCallExpression expression)
+        {
+            var property = ParseMember(expression.Arguments[0]);
+            return $"({property} IS NULL OR {property} = '')";
+        }
+
+        private string HandleBetween(MethodCallExpression expression)
+        {
+            var property = ParseMember(expression.Arguments[0]);
+            var lower = ParseValue(expression.Arguments[1]);
+            var upper = ParseValue(expression.Arguments[2]);
+            return $"{property} BETWEEN {lower} AND {upper}";
+        }
+
+        private string ParseMember(Expression expression)
+        {
+            if (expression is UnaryExpression unary)
+            {
+                return ParseMember(unary.Operand);
+            }                
+            if (expression is MemberExpression member)
+            {
+                var property = member.Member as PropertyInfo;
+                return GetColumnName(property);
+            }
+
             throw new NotSupportedException($"Unsupported member expression: {expression}");
         }
 
-        private string ParseValueExpression(Expression expression)
+        private string ParseValue(Expression expression, string format = null)
         {
             var value = Expression.Lambda(expression).Compile().DynamicInvoke();
-            if (value is string stringValue)
+            var paramName = $"@p{_parameters.Count}";
+
+            if (format != null && value is string str)
             {
-                return $"'{stringValue}'";
-            }
-            return value.ToString();
+                value = string.Format(format, str);
+            }                
+            _parameters[paramName] = value;
+            return paramName;
         }
 
         private bool IsNullConstant(Expression expression)
         {
-            return expression.NodeType == ExpressionType.Constant && ((ConstantExpression)expression).Value == null;
+            return expression is ConstantExpression constant && constant.Value == null;
         }
 
-        private string GetTableName<T>()
+        private string GetTableName()
         {
-            var tableAttribute = typeof(T).GetCustomAttribute<TableAttribute>();
-            return tableAttribute?.TableName ?? typeof(T).Name;
+            var type = typeof(T);
+            var table = type.GetCustomAttribute<TableAttribute>();
+            var schema = table?.Schema;
+            var name = table?.TableName ?? type.Name;
+
+            return schema != null
+                ? $"[{Escape(schema)}].[{Escape(name)}]"
+                : $"[{Escape(name)}]";
+        }
+
+        private string GetColumns()
+        {
+            return string.Join(", ", typeof(T).GetProperties()
+                .Select(p => $"{GetColumnName(p)} AS [{p.Name}]"));
         }
 
         private string GetColumnName(PropertyInfo property)
         {
-            var columnAttribute = property.GetCustomAttribute<ColumnAttribute>();
-            return columnAttribute?.ColumnName ?? property.Name;
+            var column = property.GetCustomAttribute<ColumnAttribute>();
+            return $"[{Escape(column?.ColumnName ?? property.Name)}]";
+        }
+
+        private static string Escape(string identifier)
+        {
+            return identifier?.Replace("]", "]]") ?? string.Empty;
         }
     }
 }
