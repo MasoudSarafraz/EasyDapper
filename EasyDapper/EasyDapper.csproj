@@ -1,0 +1,21 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+	<PropertyGroup>
+		<!-- Multi-targeting for .NET Framework and .NET Core -->
+		<TargetFrameworks>netstandard2.0;net8</TargetFrameworks>
+		<PackageId>ProfessionalDapperLibrary</PackageId>
+		<Version>1.0.0</Version>
+		<Authors>YourName</Authors>
+		<Description>A professional Dapper library with CRUD, dynamic queries, stored procedures, attributes, thread-safety, and transaction support.</Description>
+	</PropertyGroup>
+
+	<ItemGroup>
+		<PackageReference Include="Dapper" Version="1.50.2" />
+	</ItemGroup>
+
+	<ItemGroup Condition="'$(TargetFramework)' == 'net48'">
+		<Reference Include="System.Data" />
+		<Reference Include="System.Data.SqlClient" />
+	</ItemGroup>
+
+</Project>
