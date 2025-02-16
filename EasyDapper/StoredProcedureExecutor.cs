@@ -2,61 +2,68 @@
 using System.Collections.Generic;
 using System.Data;
 using System.Data.SqlClient;
+using System.Threading;
 using System.Threading.Tasks;
 using Dapper;
 using EasyDapper.Interfaces;
 
 namespace ProfessionalDapperLibrary.Implementations
 {
-    internal class StoredProcedureExecutor<T> : IStoredProcedureExecutor<T>
-    {
-        private readonly Lazy<IDbConnection> _lazyConnection;
+    //internal sealed class StoredProcedureExecutor<T> : IStoredProcedureExecutor<T>
+    //{
+    //    private readonly string _connectionString;
 
-        public StoredProcedureExecutor(string connectionString)
-        {
-            _lazyConnection = new Lazy<IDbConnection>(() => new SqlConnection(connectionString));
-        }
+    //    public StoredProcedureExecutor(string connectionString)
+    //    {
+    //        _connectionString = connectionString ?? throw new ArgumentNullException(nameof(connectionString));
+    //    }
 
-        private IDbConnection GetOpenConnection()
-        {
-            var connection = _lazyConnection.Value;
-            if (connection.State != ConnectionState.Open)
-            {
-                connection.Open();
-            }
-            return connection;
-        }
+    //    public IEnumerable<T> Execute(string procedureName, object parameters = null)
+    //    {
+    //        ValidateProcedureName(procedureName);
 
-        public IEnumerable<T> Execute(string procedureName, object parameters = null)
-        {
-            using (var connection = GetOpenConnection())
-            {
-                return connection.Query<T>(
-                    procedureName,
-                    param: parameters,
-                    commandType: CommandType.StoredProcedure
-                );
-            }
-        }
+    //        using (var connection = new SqlConnection(_connectionString))
+    //        {
+    //            connection.Open();
+    //            return connection.Query<T>(
+    //                procedureName,
+    //                param: parameters,
+    //                commandType: CommandType.StoredProcedure
+    //            );
+    //        }
+    //    }
 
-        public async Task<IEnumerable<T>> ExecuteAsync(string procedureName, object parameters = null)
-        {
-            using (var connection = GetOpenConnection())
-            {
-                return await connection.QueryAsync<T>(
-                    procedureName,
-                    param: parameters,
-                    commandType: CommandType.StoredProcedure
-                );
-            }
-        }
+    //    public async Task<IEnumerable<T>> ExecuteAsync(
+    //        string procedureName,
+    //        object parameters = null,
+    //        CancellationToken cancellationToken = default)
+    //    {
+    //        ValidateProcedureName(procedureName);
 
-        public void Dispose()
-        {
-            if (_lazyConnection.IsValueCreated)
-            {
-                _lazyConnection.Value.Dispose();
-            }
-        }
-    }
+    //        using (var connection = new SqlConnection(_connectionString))
+    //        {
+    //            await connection.OpenAsync(cancellationToken).ConfigureAwait(false);
+    //            return await connection.QueryAsync<T>(
+    //                new CommandDefinition(
+    //                    procedureName,
+    //                    parameters,
+    //                    commandType: CommandType.StoredProcedure,
+    //                    cancellationToken: cancellationToken
+    //                )
+    //            ).ConfigureAwait(false);
+    //        }
+    //    }
+
+    //    private static void ValidateProcedureName(string procedureName)
+    //    {
+    //        if (string.IsNullOrWhiteSpace(procedureName))
+    //        {
+    //            throw new ArgumentException(
+    //                "Procedure name cannot be null or whitespace.",
+    //                nameof(procedureName)
+    //            );
+    //        }
+    //    }
+
+    //}
 }

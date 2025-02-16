@@ -1,0 +1,27 @@
+﻿// نمونه ۱: دو نتیجه
+var (users, orders) = executor.ExecuteMultiResultStoredProcedure(
+    "usp_GetUserOrders",
+    gr => (gr.Read<User>(), gr.Read<Order>()),
+    new { UserId = 123 }
+);
+
+// نمونه ۲: سه نتیجه
+var result = executor.ExecuteMultiResultStoredProcedure(
+    "usp_GetDashboardData",
+    gr => new {
+        Users = gr.Read<User>(),
+        Orders = gr.Read<Order>(),
+        Stats = gr.Read<DashboardStats>().FirstOrDefault()
+    },
+    new { Year = 2023 }
+);
+
+// نمونه Async
+var data = await executor.ExecuteMultiResultStoredProcedureAsync(
+    "usp_GetReports",
+    async gr => (
+        await gr.ReadAsync<SalesReport>(),
+        await gr.ReadAsync<InventoryReport>()
+    ),
+    new { Region = "North" }
+);

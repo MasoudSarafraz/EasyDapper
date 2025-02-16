@@ -12,10 +12,11 @@ using System.Collections.Generic;
 using System.Collections.Concurrent;
 using System.Data.SqlTypes;
 using System.Text;
+using System.Threading;
 
 
 namespace EasyDapper.Implementations
-{   
+{
     internal class DapperService : IDapperService, IDisposable
     {
         private readonly IDbConnection _externalConnection;
@@ -204,6 +205,26 @@ namespace EasyDapper.Implementations
             });
             return await connection.ExecuteAsync(query, entity, _transaction);
         }
+        public virtual async Task<int> UpdateListAsync<T>(IEnumerable<T> entities) where T : class
+        {
+            if (entities == null || !entities.Any())
+                throw new ArgumentException("Entities list cannot be null or empty", nameof(entities));
+
+            var connection = await GetOpenConnectionAsync();
+            var query = UpdateQueryCache.GetOrAdd(typeof(T), type =>
+            {
+                var tableName = GetTableName<T>();
+                var primaryKeys = GetPrimaryKeyProperties<T>();
+                var properties = typeof(T).GetProperties().Where(p => !IsPrimaryKey(p));
+
+                var setClause = string.Join(", ", properties.Select(p => $"{GetColumnName(p)} = @{p.Name}"));
+                var whereClause = string.Join(" AND ", primaryKeys.Select(p => $"{GetColumnName(p)} = @{p.Name}"));
+
+                return $"UPDATE {tableName} SET {setClause} WHERE {whereClause}";
+            });
+
+            return await connection.ExecuteAsync(query, entities, _transaction);
+        }
 
         public virtual int Delete<T>(T entity) where T : class
         {
@@ -235,6 +256,48 @@ namespace EasyDapper.Implementations
 
             var parameters = GetPrimaryKeyProperties<T>()
                 .ToDictionary(p => p.Name, p => p.GetValue(entity));
+
+            return await connection.ExecuteAsync(query, parameters, _transaction);
+        }
+
+        public virtual int DeleteList<T>(IEnumerable<T> entities) where T : class
+        {
+            if (entities == null || !entities.Any())
+                throw new ArgumentException("Entities list cannot be null or empty", nameof(entities));
+
+            var connection = GetOpenConnection();
+            var query = DeleteQueryCache.GetOrAdd(typeof(T), type =>
+            {
+                var tableName = GetTableName<T>();
+                var primaryKeys = GetPrimaryKeyProperties<T>();
+                var whereClause = string.Join(" AND ", primaryKeys.Select(p => $"{GetColumnName(p)} = @{p.Name}"));
+                return $"DELETE FROM {tableName} WHERE {whereClause}";
+            });
+
+            var primaryKeyProperties = GetPrimaryKeyProperties<T>();
+            var parameters = entities.Select(entity =>
+                primaryKeyProperties.ToDictionary(pk => pk.Name, pk => pk.GetValue(entity)));
+
+            return connection.Execute(query, parameters, _transaction);
+        }
+
+        public virtual async Task<int> DeleteListAsync<T>(IEnumerable<T> entities) where T : class
+        {
+            if (entities == null || !entities.Any())
+                throw new ArgumentException("Entities list cannot be null or empty", nameof(entities));
+
+            var connection = await GetOpenConnectionAsync();
+            var query = DeleteQueryCache.GetOrAdd(typeof(T), type =>
+            {
+                var tableName = GetTableName<T>();
+                var primaryKeys = GetPrimaryKeyProperties<T>();
+                var whereClause = string.Join(" AND ", primaryKeys.Select(p => $"{GetColumnName(p)} = @{p.Name}"));
+                return $"DELETE FROM {tableName} WHERE {whereClause}";
+            });
+
+            var primaryKeyProperties = GetPrimaryKeyProperties<T>();
+            var parameters = entities.Select(entity =>
+                primaryKeyProperties.ToDictionary(pk => pk.Name, pk => pk.GetValue(entity)));
 
             return await connection.ExecuteAsync(query, parameters, _transaction);
         }
@@ -316,69 +379,6 @@ namespace EasyDapper.Implementations
             return await connection.QueryFirstOrDefaultAsync<T>(query, parameters, _transaction);
         }
 
-        public virtual async Task<int> UpdateListAsync<T>(IEnumerable<T> entities) where T : class
-        {
-            if (entities == null || !entities.Any())
-                throw new ArgumentException("Entities list cannot be null or empty", nameof(entities));
-
-            var connection = await GetOpenConnectionAsync();
-            var query = UpdateQueryCache.GetOrAdd(typeof(T), type =>
-            {
-                var tableName = GetTableName<T>();
-                var primaryKeys = GetPrimaryKeyProperties<T>();
-                var properties = typeof(T).GetProperties().Where(p => !IsPrimaryKey(p));
-
-                var setClause = string.Join(", ", properties.Select(p => $"{GetColumnName(p)} = @{p.Name}"));
-                var whereClause = string.Join(" AND ", primaryKeys.Select(p => $"{GetColumnName(p)} = @{p.Name}"));
-
-                return $"UPDATE {tableName} SET {setClause} WHERE {whereClause}";
-            });
-
-            return await connection.ExecuteAsync(query, entities, _transaction);
-        }
-
-        public virtual int DeleteList<T>(IEnumerable<T> entities) where T : class
-        {
-            if (entities == null || !entities.Any())
-                throw new ArgumentException("Entities list cannot be null or empty", nameof(entities));
-
-            var connection = GetOpenConnection();
-            var query = DeleteQueryCache.GetOrAdd(typeof(T), type =>
-            {
-                var tableName = GetTableName<T>();
-                var primaryKeys = GetPrimaryKeyProperties<T>();
-                var whereClause = string.Join(" AND ", primaryKeys.Select(p => $"{GetColumnName(p)} = @{p.Name}"));
-                return $"DELETE FROM {tableName} WHERE {whereClause}";
-            });
-
-            var primaryKeyProperties = GetPrimaryKeyProperties<T>();
-            var parameters = entities.Select(entity =>
-                primaryKeyProperties.ToDictionary(pk => pk.Name, pk => pk.GetValue(entity)));
-
-            return connection.Execute(query, parameters, _transaction);
-        }
-
-        public virtual async Task<int> DeleteListAsync<T>(IEnumerable<T> entities) where T : class
-        {
-            if (entities == null || !entities.Any())
-                throw new ArgumentException("Entities list cannot be null or empty", nameof(entities));
-
-            var connection = await GetOpenConnectionAsync();
-            var query = DeleteQueryCache.GetOrAdd(typeof(T), type =>
-            {
-                var tableName = GetTableName<T>();
-                var primaryKeys = GetPrimaryKeyProperties<T>();
-                var whereClause = string.Join(" AND ", primaryKeys.Select(p => $"{GetColumnName(p)} = @{p.Name}"));
-                return $"DELETE FROM {tableName} WHERE {whereClause}";
-            });
-
-            var primaryKeyProperties = GetPrimaryKeyProperties<T>();
-            var parameters = entities.Select(entity =>
-                primaryKeyProperties.ToDictionary(pk => pk.Name, pk => pk.GetValue(entity)));
-
-            return await connection.ExecuteAsync(query, parameters, _transaction);
-        }
-
         public IQueryBuilder<T> QueryBuilder<T>()
         {
             if (_externalConnection != null)
@@ -387,13 +387,13 @@ namespace EasyDapper.Implementations
             return new QueryBuilder<T>(_lazyConnection.Value.ConnectionString);
         }
 
-        public IStoredProcedureExecutor<T> CreateStoredProcedureExecutor<T>()
-        {
-            if (_externalConnection != null)
-                throw new InvalidOperationException("Stored procedures are not supported when using an external connection.");
+        //public IStoredProcedureExecutor<T> CreateStoredProcedureExecutor<T>()
+        //{
+        //    if (_externalConnection != null)
+        //        throw new InvalidOperationException("Stored procedures are not supported when using an external connection.");
 
-            return StoredProcedureExecutorFactory.Create<T>(_lazyConnection.Value.ConnectionString);
-        }
+        //    return StoredProcedureExecutorFactory.Create<T>(_lazyConnection.Value.ConnectionString);
+        //}
 
         public void Dispose()
         {
@@ -446,6 +446,80 @@ namespace EasyDapper.Implementations
         private IEnumerable<PropertyInfo> GetInsertProperties<T>()
         {
             return typeof(T).GetProperties().Where(p => p.GetCustomAttribute<PrimaryKeyAttribute>() == null);
+        }
+        public IEnumerable<T> ExecuteStoredProcedure<T>(string procedureName, object parameters = null)
+        {
+            ValidateProcedureName(procedureName);
+            var openConnection = GetOpenConnection();
+            //openConnection.Open();
+            return openConnection.Query<T>(
+                procedureName,
+                param: parameters,
+                commandType: CommandType.StoredProcedure
+            );
+        }
+
+        public async Task<IEnumerable<T>> ExecuteStoredProcedureAsync<T>(string procedureName, object parameters = null, CancellationToken cancellationToken = default)
+        {
+            ValidateProcedureName(procedureName);
+            var openConnection = GetOpenConnection();
+            //await connection.OpenAsync(cancellationToken).ConfigureAwait(false);
+            return await openConnection.QueryAsync<T>(
+                new CommandDefinition(
+                    procedureName,
+                    parameters,
+                    commandType: CommandType.StoredProcedure,
+                    cancellationToken: cancellationToken
+                )
+            ).ConfigureAwait(false);
+        }
+
+        private static void ValidateProcedureName(string procedureName)
+        {
+            if (string.IsNullOrWhiteSpace(procedureName))
+            {
+                throw new ArgumentException(
+                    "Procedure name cannot be null or whitespace.",
+                    nameof(procedureName)
+                );
+            }
+        }
+
+        public T ExecuteMultiResultStoredProcedure<T>(string procedureName, Func<SqlMapper.GridReader, T> mapper, object parameters = null, IDbTransaction transaction = null, int? commandTimeout = null)
+        {
+            ValidateProcedureName(procedureName);
+            using (var openConnection = GetOpenConnection())
+            {
+                using (var multi = openConnection.QueryMultiple(
+                    procedureName,
+                    parameters,
+                    transaction,
+                    commandTimeout ?? openConnection.ConnectionTimeout,
+                    CommandType.StoredProcedure))
+                {
+                    return mapper(multi);
+                }
+            }
+        }
+        public async Task<T> ExecuteMultiResultStoredProcedureAsync<T>(string procedureName, Func<SqlMapper.GridReader, Task<T>> asyncMapper, object parameters = null, IDbTransaction transaction = null, int? commandTimeout = null, CancellationToken cancellationToken = default)
+        {
+            ValidateProcedureName(procedureName);
+            using (var openConnection = GetOpenConnection())
+            {
+                using (var multi = await openConnection.QueryMultipleAsync(
+                    new CommandDefinition(
+                        procedureName,
+                        parameters,
+                        transaction,
+                        commandTimeout ?? openConnection.ConnectionTimeout,
+                        CommandType.StoredProcedure,
+                        cancellationToken: cancellationToken
+                    )
+                ).ConfigureAwait(false))
+                {
+                    return await asyncMapper(multi).ConfigureAwait(false);
+                }
+            }
         }
     }
 }
