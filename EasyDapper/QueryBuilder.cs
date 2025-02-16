@@ -1,6 +1,7 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.Data;
+using System.Data.Common;
 using System.Data.SqlClient;
 using System.Linq;
 using System.Linq.Expressions;
@@ -14,15 +15,16 @@ using EasyDapper.Interfaces;
 namespace EasyDapper.Implementations
 {
 
-    internal sealed class QueryBuilder<T> : IQueryBuilder<T>
+    internal sealed class QueryBuilder<T> : IQueryBuilder<T>, IDisposable
     {
-        private readonly string _connectionString;
         private readonly List<string> _filters = new List<string>();
         private readonly Dictionary<string, object> _parameters = new Dictionary<string, object>();
+        private readonly Lazy<IDbConnection> _lazyConnection;
 
         public QueryBuilder(string connectionString)
         {
-            _connectionString = connectionString ?? throw new ArgumentNullException(nameof(connectionString));
+            //_connectionString = connectionString ?? throw new ArgumentNullException(nameof(connectionString));
+            _lazyConnection = new Lazy<IDbConnection>(() => new SqlConnection(connectionString));
         }
 
         public IQueryBuilder<T> Where(Expression<Func<T, bool>> filter)
@@ -30,7 +32,7 @@ namespace EasyDapper.Implementations
             if (filter == null)
             {
                 throw new ArgumentNullException(nameof(filter));
-            }                
+            }
             var expression = ParseExpression(filter.Body);
             _filters.Add(expression);
             return this;
@@ -39,19 +41,17 @@ namespace EasyDapper.Implementations
         public IEnumerable<T> Execute()
         {
             var query = BuildQuery();
-            using (var connection = new SqlConnection(_connectionString))
-            {
-                return connection.Query<T>(query, _parameters);
-            }
+            var connection = GetOpenConnection();
+            return connection.Query<T>(query, _parameters);
+
         }
 
         public async Task<IEnumerable<T>> ExecuteAsync()
         {
             var query = BuildQuery();
-            using (var connection = new SqlConnection(_connectionString))
-            {
-                return await connection.QueryAsync<T>(query, _parameters);
-            }
+            var connection = GetOpenConnection();
+            return await connection.QueryAsync<T>(query, _parameters);
+
         }
 
         private string BuildQuery()
@@ -160,7 +160,7 @@ namespace EasyDapper.Implementations
             if (expression.Arguments[0] is NewArrayExpression)
             {
                 return HandleIn(expression);
-            }                
+            }
             return HandleLike(expression, "%{0}%");
         }
 
@@ -198,7 +198,7 @@ namespace EasyDapper.Implementations
             if (expression is UnaryExpression unary)
             {
                 return ParseMember(unary.Operand);
-            }                
+            }
             if (expression is MemberExpression member)
             {
                 var property = member.Member as PropertyInfo;
@@ -216,7 +216,7 @@ namespace EasyDapper.Implementations
             if (format != null && value is string str)
             {
                 value = string.Format(format, str);
-            }                
+            }
             _parameters[paramName] = value;
             return paramName;
         }
@@ -253,6 +253,22 @@ namespace EasyDapper.Implementations
         private static string Escape(string identifier)
         {
             return identifier?.Replace("]", "]]") ?? string.Empty;
+        }
+        private IDbConnection GetOpenConnection()
+        {
+            var connection = _lazyConnection.Value;
+            if (connection.State != ConnectionState.Open)
+            {
+                connection.Open();
+            }
+            return connection;
+        }
+        public void Dispose()
+        {
+            if (_lazyConnection?.IsValueCreated == true)
+            {
+                _lazyConnection.Value.Dispose();
+            }
         }
     }
 }

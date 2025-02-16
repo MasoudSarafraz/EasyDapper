@@ -13,6 +13,8 @@ using System.Collections.Concurrent;
 using System.Data.SqlTypes;
 using System.Text;
 using System.Threading;
+using System.Text.RegularExpressions;
+using System.Xml.Linq;
 
 
 namespace EasyDapper.Implementations
@@ -36,51 +38,12 @@ namespace EasyDapper.Implementations
         {
             _externalConnection = externalConnection ?? throw new ArgumentNullException(nameof(externalConnection));
         }
-
-        private IDbConnection GetOpenConnection()
-        {
-            if (_externalConnection != null)
-            {
-                if (_externalConnection.State != ConnectionState.Open)
-                    _externalConnection.Open();
-
-                return _externalConnection;
-            }
-
-            var connection = _lazyConnection.Value;
-            if (connection.State != ConnectionState.Open)
-                connection.Open();
-
-            return connection;
-        }
-
-        private async Task<IDbConnection> GetOpenConnectionAsync()
-        {
-            if (_externalConnection != null)
-            {
-                if (_externalConnection.State != ConnectionState.Open)
-                    _externalConnection.Open();
-
-                return _externalConnection;
-            }
-
-            var connection = _lazyConnection.Value;
-            if (connection.State != ConnectionState.Open)
-            {
-                if (connection is SqlConnection sqlConnection)
-                    await sqlConnection.OpenAsync().ConfigureAwait(false);
-                else
-                    connection.Open();
-            }
-
-            return connection;
-        }
-
         public void BeginTransaction()
         {
             if (_transaction != null)
+            {
                 throw new InvalidOperationException("A transaction is already in progress.");
-
+            }
             var connection = GetOpenConnection();
             _transaction = connection.BeginTransaction();
         }
@@ -88,8 +51,9 @@ namespace EasyDapper.Implementations
         public void CommitTransaction()
         {
             if (_transaction == null)
+            {
                 throw new InvalidOperationException("No transaction is in progress.");
-
+            }
             try
             {
                 _transaction.Commit();
@@ -109,8 +73,9 @@ namespace EasyDapper.Implementations
         public void RollbackTransaction()
         {
             if (_transaction == null)
+            {
                 throw new InvalidOperationException("No transaction is in progress.");
-
+            }
             try
             {
                 _transaction.Rollback();
@@ -172,7 +137,6 @@ namespace EasyDapper.Implementations
             {
                 throw new ArgumentException("Entities list cannot be null or empty", nameof(entities));
             }
-
             var connection = GetOpenConnection();
             var query = UpdateQueryCache.GetOrAdd(typeof(T), type =>
             {
@@ -208,8 +172,9 @@ namespace EasyDapper.Implementations
         public async Task<int> UpdateListAsync<T>(IEnumerable<T> entities) where T : class
         {
             if (entities == null || !entities.Any())
+            {
                 throw new ArgumentException("Entities list cannot be null or empty", nameof(entities));
-
+            }
             var connection = await GetOpenConnectionAsync();
             var query = UpdateQueryCache.GetOrAdd(typeof(T), type =>
             {
@@ -263,8 +228,9 @@ namespace EasyDapper.Implementations
         public int DeleteList<T>(IEnumerable<T> entities) where T : class
         {
             if (entities == null || !entities.Any())
+            {
                 throw new ArgumentException("Entities list cannot be null or empty", nameof(entities));
-
+            }
             var connection = GetOpenConnection();
             var query = DeleteQueryCache.GetOrAdd(typeof(T), type =>
             {
@@ -284,8 +250,9 @@ namespace EasyDapper.Implementations
         public async Task<int> DeleteListAsync<T>(IEnumerable<T> entities) where T : class
         {
             if (entities == null || !entities.Any())
+            {
                 throw new ArgumentException("Entities list cannot be null or empty", nameof(entities));
-
+            }
             var connection = await GetOpenConnectionAsync();
             var query = DeleteQueryCache.GetOrAdd(typeof(T), type =>
             {
@@ -382,8 +349,9 @@ namespace EasyDapper.Implementations
         public IQueryBuilder<T> QueryBuilder<T>()
         {
             if (_externalConnection != null)
+            {
                 throw new InvalidOperationException("QueryBuilder is not supported when using an external connection.");
-
+            }
             return new QueryBuilder<T>(_lazyConnection.Value.ConnectionString);
         }
 
@@ -399,15 +367,92 @@ namespace EasyDapper.Implementations
         {
             _transaction?.Dispose();
             if (_lazyConnection?.IsValueCreated == true)
+            {
                 _lazyConnection.Value.Dispose();
+            }
+        }
+        public IEnumerable<T> ExecuteStoredProcedure<T>(string procedureName, object parameters = null)
+        {
+            IsValidProcedureName(procedureName);
+            var openConnection = GetOpenConnection();
+            //openConnection.Open();
+            return openConnection.Query<T>(
+            procedureName,
+            param: parameters,
+            commandType: CommandType.StoredProcedure
+            );
+        }
+
+        public async Task<IEnumerable<T>> ExecuteStoredProcedureAsync<T>(string procedureName, object parameters = null, CancellationToken cancellationToken = default)
+        {
+            IsValidProcedureName(procedureName);
+            var openConnection = GetOpenConnection();
+            //await connection.OpenAsync(cancellationToken).ConfigureAwait(false);
+            return await openConnection.QueryAsync<T>(
+            new CommandDefinition(
+                procedureName,
+                parameters,
+                commandType: CommandType.StoredProcedure,
+                cancellationToken: cancellationToken
+            )
+            ).ConfigureAwait(false);
+        }
+
+        private void IsValidProcedureName(string procedureName)
+        {
+            //if (string.IsNullOrWhiteSpace(procedureName))
+            //{
+            //    throw new ArgumentException(
+            //        "Procedure name cannot be null or whitespace.",
+            //        nameof(procedureName)
+            //    );
+            //}
+            if (!Regex.IsMatch(procedureName, @"^[a-zA-Z_][a-zA-Z0-9_]*$"))
+            {
+                throw new ArgumentException("Procedure name is not valid", nameof(procedureName));
+            }
+        }
+
+        public T ExecuteMultiResultStoredProcedure<T>(string procedureName, Func<SqlMapper.GridReader, T> mapper, object parameters = null, IDbTransaction transaction = null, int? commandTimeout = null)
+        {
+            IsValidProcedureName(procedureName);
+            var openConnection = GetOpenConnection();
+            using (var multi = openConnection.QueryMultiple(
+                procedureName,
+                parameters,
+                transaction,
+                commandTimeout ?? openConnection.ConnectionTimeout,
+                CommandType.StoredProcedure))
+            {
+                return mapper(multi);
+            }
+        }
+        public async Task<T> ExecuteMultiResultStoredProcedureAsync<T>(string procedureName, Func<SqlMapper.GridReader, Task<T>> asyncMapper, object parameters = null, IDbTransaction transaction = null, int? commandTimeout = null, CancellationToken cancellationToken = default)
+        {
+            IsValidProcedureName(procedureName);
+            var openConnection = GetOpenConnection();
+            using (var multi = await openConnection.QueryMultipleAsync(
+                new CommandDefinition(
+                    procedureName,
+                    parameters,
+                    transaction,
+                    commandTimeout ?? openConnection.ConnectionTimeout,
+                    CommandType.StoredProcedure,
+                    cancellationToken: cancellationToken
+                )
+            ).ConfigureAwait(false))
+            {
+                return await asyncMapper(multi).ConfigureAwait(false);
+            }
         }
 
         private string GetTableName<T>()
         {
             var tableAttribute = typeof(T).GetCustomAttribute<TableAttribute>();
             if (tableAttribute == null)
+            {
                 return $"[{typeof(T).Name}]";
-
+            }
             var schema = string.IsNullOrWhiteSpace(tableAttribute.Schema)
                 ? null
                 : $"[{tableAttribute.Schema}]";
@@ -440,86 +485,49 @@ namespace EasyDapper.Implementations
             return properties;
         }
 
-        private bool IsPrimaryKey(PropertyInfo property) =>
-            property.GetCustomAttribute<PrimaryKeyAttribute>() != null;
+        private bool IsPrimaryKey(PropertyInfo property) => property.GetCustomAttribute<PrimaryKeyAttribute>() != null;
 
         private IEnumerable<PropertyInfo> GetInsertProperties<T>()
         {
             return typeof(T).GetProperties().Where(p => p.GetCustomAttribute<PrimaryKeyAttribute>() == null);
         }
-        public IEnumerable<T> ExecuteStoredProcedure<T>(string procedureName, object parameters = null)
+        private IDbConnection GetOpenConnection()
         {
-            ValidateProcedureName(procedureName);
-            var openConnection = GetOpenConnection();
-            //openConnection.Open();
-            return openConnection.Query<T>(
-                procedureName,
-                param: parameters,
-                commandType: CommandType.StoredProcedure
-            );
-        }
-
-        public async Task<IEnumerable<T>> ExecuteStoredProcedureAsync<T>(string procedureName, object parameters = null, CancellationToken cancellationToken = default)
-        {
-            ValidateProcedureName(procedureName);
-            var openConnection = GetOpenConnection();
-            //await connection.OpenAsync(cancellationToken).ConfigureAwait(false);
-            return await openConnection.QueryAsync<T>(
-                new CommandDefinition(
-                    procedureName,
-                    parameters,
-                    commandType: CommandType.StoredProcedure,
-                    cancellationToken: cancellationToken
-                )
-            ).ConfigureAwait(false);
-        }
-
-        private static void ValidateProcedureName(string procedureName)
-        {
-            if (string.IsNullOrWhiteSpace(procedureName))
+            if (_externalConnection != null)
             {
-                throw new ArgumentException(
-                    "Procedure name cannot be null or whitespace.",
-                    nameof(procedureName)
-                );
-            }
-        }
-
-        public T ExecuteMultiResultStoredProcedure<T>(string procedureName, Func<SqlMapper.GridReader, T> mapper, object parameters = null, IDbTransaction transaction = null, int? commandTimeout = null)
-        {
-            ValidateProcedureName(procedureName);
-            using (var openConnection = GetOpenConnection())
-            {
-                using (var multi = openConnection.QueryMultiple(
-                    procedureName,
-                    parameters,
-                    transaction,
-                    commandTimeout ?? openConnection.ConnectionTimeout,
-                    CommandType.StoredProcedure))
+                if (_externalConnection.State != ConnectionState.Open)
                 {
-                    return mapper(multi);
+                    _externalConnection.Open();
                 }
+                return _externalConnection;
             }
-        }
-        public async Task<T> ExecuteMultiResultStoredProcedureAsync<T>(string procedureName, Func<SqlMapper.GridReader, Task<T>> asyncMapper, object parameters = null, IDbTransaction transaction = null, int? commandTimeout = null, CancellationToken cancellationToken = default)
-        {
-            ValidateProcedureName(procedureName);
-            using (var openConnection = GetOpenConnection())
+            var connection = _lazyConnection.Value;
+            if (connection.State != ConnectionState.Open)
             {
-                using (var multi = await openConnection.QueryMultipleAsync(
-                    new CommandDefinition(
-                        procedureName,
-                        parameters,
-                        transaction,
-                        commandTimeout ?? openConnection.ConnectionTimeout,
-                        CommandType.StoredProcedure,
-                        cancellationToken: cancellationToken
-                    )
-                ).ConfigureAwait(false))
-                {
-                    return await asyncMapper(multi).ConfigureAwait(false);
-                }
+                connection.Open();
             }
+            return connection;
+        }
+        private async Task<IDbConnection> GetOpenConnectionAsync()
+        {
+            if (_externalConnection != null)
+            {
+                if (_externalConnection.State != ConnectionState.Open)
+                    _externalConnection.Open();
+
+                return _externalConnection;
+            }
+
+            var connection = _lazyConnection.Value;
+            if (connection.State != ConnectionState.Open)
+            {
+                if (connection is SqlConnection sqlConnection)
+                    await sqlConnection.OpenAsync().ConfigureAwait(false);
+                else
+                    connection.Open();
+            }
+
+            return connection;
         }
     }
 }
