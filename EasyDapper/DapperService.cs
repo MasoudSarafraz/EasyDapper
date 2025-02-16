@@ -17,7 +17,7 @@ using System.Threading;
 
 namespace EasyDapper.Implementations
 {
-    internal class DapperService : IDapperService, IDisposable
+    internal sealed class DapperService : IDapperService, IDisposable
     {
         private readonly IDbConnection _externalConnection;
         private readonly Lazy<IDbConnection> _lazyConnection;
@@ -76,7 +76,7 @@ namespace EasyDapper.Implementations
             return connection;
         }
 
-        public virtual void BeginTransaction()
+        public void BeginTransaction()
         {
             if (_transaction != null)
                 throw new InvalidOperationException("A transaction is already in progress.");
@@ -85,7 +85,7 @@ namespace EasyDapper.Implementations
             _transaction = connection.BeginTransaction();
         }
 
-        public virtual void CommitTransaction()
+        public void CommitTransaction()
         {
             if (_transaction == null)
                 throw new InvalidOperationException("No transaction is in progress.");
@@ -106,7 +106,7 @@ namespace EasyDapper.Implementations
             }
         }
 
-        public virtual void RollbackTransaction()
+        public void RollbackTransaction()
         {
             if (_transaction == null)
                 throw new InvalidOperationException("No transaction is in progress.");
@@ -122,7 +122,7 @@ namespace EasyDapper.Implementations
             }
         }
 
-        public virtual int Insert<T>(T entity) where T : class
+        public int Insert<T>(T entity) where T : class
         {
             var connection = GetOpenConnection();
             var query = InsertQueryCache.GetOrAdd(typeof(T), type =>
@@ -136,7 +136,7 @@ namespace EasyDapper.Implementations
             return connection.Execute(query, entity, _transaction);
         }
 
-        public virtual async Task<int> InsertAsync<T>(T entity) where T : class
+        public async Task<int> InsertAsync<T>(T entity) where T : class
         {
             var connection = await GetOpenConnectionAsync();
             var query = InsertQueryCache.GetOrAdd(typeof(T), type =>
@@ -150,7 +150,7 @@ namespace EasyDapper.Implementations
             return await connection.ExecuteAsync(query, entity, _transaction);
         }
 
-        public virtual int Update<T>(T entity) where T : class
+        public int Update<T>(T entity) where T : class
         {
             var connection = GetOpenConnection();
             var query = UpdateQueryCache.GetOrAdd(typeof(T), type =>
@@ -166,7 +166,7 @@ namespace EasyDapper.Implementations
             });
             return connection.Execute(query, entity, _transaction);
         }
-        public virtual int UpdateList<T>(IEnumerable<T> entities) where T : class
+        public int UpdateList<T>(IEnumerable<T> entities) where T : class
         {
             if (entities == null || !entities.Any())
             {
@@ -189,7 +189,7 @@ namespace EasyDapper.Implementations
             return connection.Execute(query, entities, _transaction);
         }
 
-        public virtual async Task<int> UpdateAsync<T>(T entity) where T : class
+        public async Task<int> UpdateAsync<T>(T entity) where T : class
         {
             var connection = await GetOpenConnectionAsync();
             var query = UpdateQueryCache.GetOrAdd(typeof(T), type =>
@@ -205,7 +205,7 @@ namespace EasyDapper.Implementations
             });
             return await connection.ExecuteAsync(query, entity, _transaction);
         }
-        public virtual async Task<int> UpdateListAsync<T>(IEnumerable<T> entities) where T : class
+        public async Task<int> UpdateListAsync<T>(IEnumerable<T> entities) where T : class
         {
             if (entities == null || !entities.Any())
                 throw new ArgumentException("Entities list cannot be null or empty", nameof(entities));
@@ -226,7 +226,7 @@ namespace EasyDapper.Implementations
             return await connection.ExecuteAsync(query, entities, _transaction);
         }
 
-        public virtual int Delete<T>(T entity) where T : class
+        public int Delete<T>(T entity) where T : class
         {
             var connection = GetOpenConnection();
             var query = DeleteQueryCache.GetOrAdd(typeof(T), type =>
@@ -243,7 +243,7 @@ namespace EasyDapper.Implementations
             return connection.Execute(query, parameters, _transaction);
         }
 
-        public virtual async Task<int> DeleteAsync<T>(T entity) where T : class
+        public async Task<int> DeleteAsync<T>(T entity) where T : class
         {
             var connection = await GetOpenConnectionAsync();
             var query = DeleteQueryCache.GetOrAdd(typeof(T), type =>
@@ -260,7 +260,7 @@ namespace EasyDapper.Implementations
             return await connection.ExecuteAsync(query, parameters, _transaction);
         }
 
-        public virtual int DeleteList<T>(IEnumerable<T> entities) where T : class
+        public int DeleteList<T>(IEnumerable<T> entities) where T : class
         {
             if (entities == null || !entities.Any())
                 throw new ArgumentException("Entities list cannot be null or empty", nameof(entities));
@@ -281,7 +281,7 @@ namespace EasyDapper.Implementations
             return connection.Execute(query, parameters, _transaction);
         }
 
-        public virtual async Task<int> DeleteListAsync<T>(IEnumerable<T> entities) where T : class
+        public async Task<int> DeleteListAsync<T>(IEnumerable<T> entities) where T : class
         {
             if (entities == null || !entities.Any())
                 throw new ArgumentException("Entities list cannot be null or empty", nameof(entities));
@@ -302,7 +302,7 @@ namespace EasyDapper.Implementations
             return await connection.ExecuteAsync(query, parameters, _transaction);
         }
 
-        public virtual T GetById<T>(string Id)
+        public T GetById<T>(string Id)
         {
             object key = Id;
             var connection = GetOpenConnection();
@@ -322,7 +322,7 @@ namespace EasyDapper.Implementations
             return connection.QueryFirstOrDefault<T>(query, parameters, _transaction);
         }
 
-        public virtual async Task<T> GetByIdAsync<T>(string Id)
+        public async Task<T> GetByIdAsync<T>(string Id)
         {
             object key = Id;
             var connection = await GetOpenConnectionAsync();
@@ -341,7 +341,7 @@ namespace EasyDapper.Implementations
 
             return await connection.QueryFirstOrDefaultAsync<T>(query, parameters, _transaction);
         }
-        public virtual T GetById<T>(T entity) where T : class
+        public T GetById<T>(T entity) where T : class
         {
             var connection = GetOpenConnection();
             var query = GetByIdQueryCache.GetOrAdd(typeof(T), type =>
@@ -360,7 +360,7 @@ namespace EasyDapper.Implementations
             return connection.QueryFirstOrDefault<T>(query, parameters, _transaction);
         }
 
-        public virtual async Task<T> GetByIdAsync<T>(T entity) where T : class
+        public async Task<T> GetByIdAsync<T>(T entity) where T : class
         {
             var connection = await GetOpenConnectionAsync();
             var query = GetByIdQueryCache.GetOrAdd(typeof(T), type =>
