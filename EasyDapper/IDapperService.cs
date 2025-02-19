@@ -13,7 +13,9 @@ namespace EasyDapper.Interfaces
         IQueryBuilder<T> QueryBuilder<T>();
         //IStoredProcedureExecutor<T> CreateStoredProcedureExecutor<T>();
         int Insert<T>(T entity) where T : class;
-        Task<int> InsertAsync<T>(T entity) where T : class;        
+        Task<int> InsertAsync<T>(T entity) where T : class;
+        int InsertList<T>(IEnumerable<T> entities) where T : class;
+        Task<int> InsertListAsync<T>(IEnumerable<T> entities) where T : class;
         int Update<T>(T entity) where T : class;        
         Task<int> UpdateAsync<T>(T entity)where T : class;
         int UpdateList<T>(IEnumerable<T> entities) where T : class;
