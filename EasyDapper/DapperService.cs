@@ -28,6 +28,7 @@ namespace EasyDapper.Implementations
         private static readonly ConcurrentDictionary<Type, string> UpdateQueryCache = new ConcurrentDictionary<Type, string>();
         private static readonly ConcurrentDictionary<Type, string> DeleteQueryCache = new ConcurrentDictionary<Type, string>();
         private static readonly ConcurrentDictionary<Type, string> GetByIdQueryCache = new ConcurrentDictionary<Type, string>();
+        private static readonly ConcurrentDictionary<Type, string> BulkInsertQueryCache = new ConcurrentDictionary<Type, string>();
 
         public DapperService(string connectionString)
         {
@@ -41,19 +42,25 @@ namespace EasyDapper.Implementations
         public void BeginTransaction()
         {
             if (_transaction != null)
-            {
                 throw new InvalidOperationException("A transaction is already in progress.");
-            }
+
             var connection = GetOpenConnection();
             _transaction = connection.BeginTransaction();
         }
 
+        public async Task BeginTransactionAsync()
+        {
+            if (_transaction != null)
+                throw new InvalidOperationException("A transaction is already in progress.");
+
+            var connection = await GetOpenConnectionAsync();
+            _transaction = connection.BeginTransaction();
+        }
         public void CommitTransaction()
         {
             if (_transaction == null)
-            {
                 throw new InvalidOperationException("No transaction is in progress.");
-            }
+
             try
             {
                 _transaction.Commit();
@@ -65,28 +72,24 @@ namespace EasyDapper.Implementations
             }
             finally
             {
-                _transaction.Dispose();
-                _transaction = null;
+                CleanupTransaction();
             }
         }
 
         public void RollbackTransaction()
         {
             if (_transaction == null)
-            {
                 throw new InvalidOperationException("No transaction is in progress.");
-            }
+
             try
             {
                 _transaction.Rollback();
             }
             finally
             {
-                _transaction.Dispose();
-                _transaction = null;
+                CleanupTransaction();
             }
         }
-
         //public int Insert<T>(T entity) where T : class
         //{
         //    var connection = GetOpenConnection();
@@ -103,21 +106,9 @@ namespace EasyDapper.Implementations
         public int Insert<T>(T entity) where T : class
         {
             var connection = GetOpenConnection();
-            var query = InsertQueryCache.GetOrAdd(typeof(T), type =>
-            {
-                var tableName = GetTableName<T>();
-                var properties = GetInsertProperties<T>();
-                var identityProp1 = GetIdentityProperty<T>();
-                var columns = string.Join(", ", properties.Select(p => GetColumnName(p)));
-                var values = string.Join(", ", properties.Select(p => $"@{p.Name}"));
-                if (identityProp1 != null)
-                {
-                    var outputClause = $"OUTPUT INSERTED.{GetColumnName(identityProp1)}";
-                    return $"INSERT INTO {tableName} ({columns}) {outputClause} VALUES ({values})";
-                }
-                return $"INSERT INTO {tableName} ({columns}) VALUES ({values})";
-            });
+            var query = InsertQueryCache.GetOrAdd(typeof(T), BuildInsertQuery<T>);
             var identityProp = GetIdentityProperty<T>();
+
             if (identityProp != null)
             {
                 var newId = connection.ExecuteScalar<int>(query, entity, _transaction);
@@ -129,32 +120,10 @@ namespace EasyDapper.Implementations
 
         public async Task<int> InsertAsync<T>(T entity) where T : class
         {
-            //var connection = await GetOpenConnectionAsync();
-            //var query = InsertQueryCache.GetOrAdd(typeof(T), type =>
-            //{
-            //    var tableName = GetTableName<T>();
-            //    var properties = GetInsertProperties<T>();
-            //    var columns = string.Join(", ", properties.Select(p => GetColumnName(p)));
-            //    var values = string.Join(", ", properties.Select(p => $"@{p.Name}"));
-            //    return $"INSERT INTO {tableName} ({columns}) VALUES ({values})";
-            //});
-            //return await connection.ExecuteAsync(query, entity, _transaction);
             var connection = await GetOpenConnectionAsync();
-            var query = InsertQueryCache.GetOrAdd(typeof(T), type =>
-            {
-                var tableName = GetTableName<T>();
-                var properties = GetInsertProperties<T>();
-                var identityProp1 = GetIdentityProperty<T>();
-                var columns = string.Join(", ", properties.Select(p => GetColumnName(p)));
-                var values = string.Join(", ", properties.Select(p => $"@{p.Name}"));
-                if (identityProp1 != null)
-                {
-                    var outputClause = $"OUTPUT INSERTED.{GetColumnName(identityProp1)}";
-                    return $"INSERT INTO {tableName} ({columns}) {outputClause} VALUES ({values})";
-                }
-                return $"INSERT INTO {tableName} ({columns}) VALUES ({values})";
-            });
+            var query = InsertQueryCache.GetOrAdd(typeof(T), BuildInsertQuery<T>);
             var identityProp = GetIdentityProperty<T>();
+
             if (identityProp != null)
             {
                 var newId = await connection.ExecuteScalarAsync<int>(query, entity, _transaction);
@@ -165,282 +134,113 @@ namespace EasyDapper.Implementations
         }
         public int InsertList<T>(IEnumerable<T> entities) where T : class
         {
-            if (entities == null || !entities.Any())
-            {
-                throw new ArgumentException("Entities list cannot be null or empty", nameof(entities));
-            }
-            var entityList = entities.ToList();
+            var entityList = ValidateAndPrepareEntities(entities);
             var connection = GetOpenConnection();
-            var query = InsertQueryCache.GetOrAdd(typeof(T), BuildInsertQuery<T>);
             var identityProp = GetIdentityProperty<T>();
-
             if (identityProp != null)
             {
-                var generatedIds = connection.Query<int>(query, entityList, _transaction).ToList();
+                var query = BuildBatchInsertWithOutputQuery<T>();
+                var parameters = new { Entities = entityList };
+                var generatedIds = connection.Query<int>(query, parameters, _transaction).ToList();
                 for (int i = 0; i < entityList.Count; i++)
                 {
                     identityProp.SetValue(entityList[i], generatedIds[i]);
                 }
-
-                return generatedIds.Count;
+                return entityList.Count;
             }
-
-            return connection.Execute(query, entityList, _transaction);
+            var bulkQuery = BulkInsertQueryCache.GetOrAdd(typeof(T), BuildBulkInsertQuery<T>);
+            return connection.Execute(bulkQuery, entityList, _transaction);
         }
-
         public async Task<int> InsertListAsync<T>(IEnumerable<T> entities) where T : class
         {
-            if (entities == null || !entities.Any())
-            {
-                throw new ArgumentException("Entities list cannot be null or empty", nameof(entities));
-            }
-
-            var entityList = entities.ToList();
+            var entityList = ValidateAndPrepareEntities(entities);
             var connection = await GetOpenConnectionAsync();
-            var query = InsertQueryCache.GetOrAdd(typeof(T), BuildInsertQuery<T>);
             var identityProp = GetIdentityProperty<T>();
+
             if (identityProp != null)
             {
-                var generatedIds = (await connection.QueryAsync<int>(query, entityList, _transaction)).ToList();
+                var query = BuildBatchInsertWithOutputQuery<T>();
+                var parameters = new { Entities = entityList };
+                var generatedIds = (await connection.QueryAsync<int>(query, parameters, _transaction)).ToList();
                 for (int i = 0; i < entityList.Count; i++)
                 {
                     identityProp.SetValue(entityList[i], generatedIds[i]);
                 }
-
-                return generatedIds.Count;
+                return entityList.Count;
             }
-
-            return await connection.ExecuteAsync(query, entityList, _transaction);
+            var bulkQuery = BulkInsertQueryCache.GetOrAdd(typeof(T), BuildBulkInsertQuery<T>);
+            return await connection.ExecuteAsync(bulkQuery, entityList, _transaction);
         }
-
         public int Update<T>(T entity) where T : class
         {
             var connection = GetOpenConnection();
-            var query = UpdateQueryCache.GetOrAdd(typeof(T), type =>
-            {
-                var tableName = GetTableName<T>();
-                var primaryKeys = GetPrimaryKeyProperties<T>();
-                var properties = typeof(T).GetProperties().Where(p => !IsPrimaryKey(p));
-
-                var setClause = string.Join(", ", properties.Select(p => $"{GetColumnName(p)} = @{p.Name}"));
-                var whereClause = string.Join(" AND ", primaryKeys.Select(p => $"{GetColumnName(p)} = @{p.Name}"));
-
-                return $"UPDATE {tableName} SET {setClause} WHERE {whereClause}";
-            });
+            var query = UpdateQueryCache.GetOrAdd(typeof(T), BuildUpdateQuery<T>);
             return connection.Execute(query, entity, _transaction);
-        }
-        public int UpdateList<T>(IEnumerable<T> entities) where T : class
-        {
-            if (entities == null || !entities.Any())
-            {
-                throw new ArgumentException("Entities list cannot be null or empty", nameof(entities));
-            }
-            var connection = GetOpenConnection();
-            var query = UpdateQueryCache.GetOrAdd(typeof(T), type =>
-            {
-                var tableName = GetTableName<T>();
-                var primaryKeys = GetPrimaryKeyProperties<T>();
-                var properties = typeof(T).GetProperties().Where(p => !IsPrimaryKey(p));
-
-                var setClause = string.Join(", ", properties.Select(p => $"{GetColumnName(p)} = @{p.Name}"));
-                var whereClause = string.Join(" AND ", primaryKeys.Select(p => $"{GetColumnName(p)} = @{p.Name}"));
-
-                return $"UPDATE {tableName} SET {setClause} WHERE {whereClause}";
-            });
-
-            return connection.Execute(query, entities, _transaction);
         }
 
         public async Task<int> UpdateAsync<T>(T entity) where T : class
         {
             var connection = await GetOpenConnectionAsync();
-            var query = UpdateQueryCache.GetOrAdd(typeof(T), type =>
-            {
-                var tableName = GetTableName<T>();
-                var primaryKeys = GetPrimaryKeyProperties<T>();
-                var properties = typeof(T).GetProperties().Where(p => !IsPrimaryKey(p));
-
-                var setClause = string.Join(", ", properties.Select(p => $"{GetColumnName(p)} = @{p.Name}"));
-                var whereClause = string.Join(" AND ", primaryKeys.Select(p => $"{GetColumnName(p)} = @{p.Name}"));
-
-                return $"UPDATE {tableName} SET {setClause} WHERE {whereClause}";
-            });
+            var query = UpdateQueryCache.GetOrAdd(typeof(T), BuildUpdateQuery<T>);
             return await connection.ExecuteAsync(query, entity, _transaction);
         }
+        public int UpdateList<T>(IEnumerable<T> entities) where T : class
+        {
+            var connection = GetOpenConnection();
+            var query = UpdateQueryCache.GetOrAdd(typeof(T), BuildUpdateQuery<T>);
+            return connection.Execute(query, entities, _transaction);
+        }
+
         public async Task<int> UpdateListAsync<T>(IEnumerable<T> entities) where T : class
         {
-            if (entities == null || !entities.Any())
-            {
-                throw new ArgumentException("Entities list cannot be null or empty", nameof(entities));
-            }
             var connection = await GetOpenConnectionAsync();
-            var query = UpdateQueryCache.GetOrAdd(typeof(T), type =>
-            {
-                var tableName = GetTableName<T>();
-                var primaryKeys = GetPrimaryKeyProperties<T>();
-                var properties = typeof(T).GetProperties().Where(p => !IsPrimaryKey(p));
-
-                var setClause = string.Join(", ", properties.Select(p => $"{GetColumnName(p)} = @{p.Name}"));
-                var whereClause = string.Join(" AND ", primaryKeys.Select(p => $"{GetColumnName(p)} = @{p.Name}"));
-
-                return $"UPDATE {tableName} SET {setClause} WHERE {whereClause}";
-            });
-
+            var query = UpdateQueryCache.GetOrAdd(typeof(T), BuildUpdateQuery<T>);
             return await connection.ExecuteAsync(query, entities, _transaction);
         }
 
         public int Delete<T>(T entity) where T : class
         {
             var connection = GetOpenConnection();
-            var query = DeleteQueryCache.GetOrAdd(typeof(T), type =>
-            {
-                var tableName = GetTableName<T>();
-                var primaryKeys = GetPrimaryKeyProperties<T>();
-                var whereClause = string.Join(" AND ", primaryKeys.Select(p => $"{GetColumnName(p)} = @{p.Name}"));
-                return $"DELETE FROM {tableName} WHERE {whereClause}";
-            });
-
-            var parameters = GetPrimaryKeyProperties<T>()
-                .ToDictionary(p => p.Name, p => p.GetValue(entity));
-
+            var query = DeleteQueryCache.GetOrAdd(typeof(T), BuildDeleteQuery<T>);
+            var parameters = CreatePrimaryKeyParameters(entity);
             return connection.Execute(query, parameters, _transaction);
         }
 
         public async Task<int> DeleteAsync<T>(T entity) where T : class
         {
             var connection = await GetOpenConnectionAsync();
-            var query = DeleteQueryCache.GetOrAdd(typeof(T), type =>
-            {
-                var tableName = GetTableName<T>();
-                var primaryKeys = GetPrimaryKeyProperties<T>();
-                var whereClause = string.Join(" AND ", primaryKeys.Select(p => $"{GetColumnName(p)} = @{p.Name}"));
-                return $"DELETE FROM {tableName} WHERE {whereClause}";
-            });
-
-            var parameters = GetPrimaryKeyProperties<T>()
-                .ToDictionary(p => p.Name, p => p.GetValue(entity));
-
+            var query = DeleteQueryCache.GetOrAdd(typeof(T), BuildDeleteQuery<T>);
+            var parameters = CreatePrimaryKeyParameters(entity);
             return await connection.ExecuteAsync(query, parameters, _transaction);
         }
-
         public int DeleteList<T>(IEnumerable<T> entities) where T : class
         {
-            if (entities == null || !entities.Any())
-            {
-                throw new ArgumentException("Entities list cannot be null or empty", nameof(entities));
-            }
             var connection = GetOpenConnection();
-            var query = DeleteQueryCache.GetOrAdd(typeof(T), type =>
-            {
-                var tableName = GetTableName<T>();
-                var primaryKeys = GetPrimaryKeyProperties<T>();
-                var whereClause = string.Join(" AND ", primaryKeys.Select(p => $"{GetColumnName(p)} = @{p.Name}"));
-                return $"DELETE FROM {tableName} WHERE {whereClause}";
-            });
-
-            var primaryKeyProperties = GetPrimaryKeyProperties<T>();
-            var parameters = entities.Select(entity =>
-                primaryKeyProperties.ToDictionary(pk => pk.Name, pk => pk.GetValue(entity)));
-
+            var query = DeleteQueryCache.GetOrAdd(typeof(T), BuildDeleteQuery<T>);
+            var parameters = entities.Select(CreatePrimaryKeyParameters);
             return connection.Execute(query, parameters, _transaction);
         }
 
         public async Task<int> DeleteListAsync<T>(IEnumerable<T> entities) where T : class
         {
-            if (entities == null || !entities.Any())
-            {
-                throw new ArgumentException("Entities list cannot be null or empty", nameof(entities));
-            }
             var connection = await GetOpenConnectionAsync();
-            var query = DeleteQueryCache.GetOrAdd(typeof(T), type =>
-            {
-                var tableName = GetTableName<T>();
-                var primaryKeys = GetPrimaryKeyProperties<T>();
-                var whereClause = string.Join(" AND ", primaryKeys.Select(p => $"{GetColumnName(p)} = @{p.Name}"));
-                return $"DELETE FROM {tableName} WHERE {whereClause}";
-            });
-
-            var primaryKeyProperties = GetPrimaryKeyProperties<T>();
-            var parameters = entities.Select(entity =>
-                primaryKeyProperties.ToDictionary(pk => pk.Name, pk => pk.GetValue(entity)));
-
+            var query = DeleteQueryCache.GetOrAdd(typeof(T), BuildDeleteQuery<T>);
+            var parameters = entities.Select(CreatePrimaryKeyParameters);
             return await connection.ExecuteAsync(query, parameters, _transaction);
         }
-
-        //public T GetById<T>(string Id)
-        //{
-        //    object key = Id;
-        //    var connection = GetOpenConnection();
-        //    var query = GetByIdQueryCache.GetOrAdd(typeof(T), type =>
-        //    {
-        //        var tableName = GetTableName<T>();
-        //        var columns = string.Join(", ", typeof(T).GetProperties()
-        //            .Select(p => $"{GetColumnName(p)} AS {p.Name}"));
-        //        var primaryKeys = GetPrimaryKeyProperties<T>();
-        //        var whereClause = string.Join(" AND ", primaryKeys.Select(p => $"{GetColumnName(p)} = @{p.Name}"));
-        //        return $"SELECT {columns} FROM {tableName} WHERE {whereClause}";
-        //    });
-
-        //    var parameters = GetPrimaryKeyProperties<T>()
-        //        .ToDictionary(p => p.Name, p => key);
-
-        //    return connection.QueryFirstOrDefault<T>(query, parameters, _transaction);
-        //}
-        public T GetById<T>(string Id)
+        public T GetById<T>(object id) where T : class
         {
-            // این متد فقط برای کلیدهای اصلی تکمقداری قابل استفاده است
-            var primaryKeys = GetPrimaryKeyProperties<T>().ToList();
-            if (primaryKeys.Count != 1)
-            {
-                throw new InvalidOperationException("This method is only supported for single primary key entities");
-            }
-            object key = Convert.ChangeType(Id, primaryKeys[0].PropertyType);
             var connection = GetOpenConnection();
-            var query = GetByIdQueryCache.GetOrAdd(typeof(T), type =>
-            {
-                var tableName = GetTableName<T>();
-                var columns = GetSelectColumns<T>();
-                var whereClause = $"{GetColumnName(primaryKeys[0])} = @Id";
-                return $"SELECT {columns} FROM {tableName} WHERE {whereClause}";
-            });
-            return connection.QueryFirstOrDefault<T>(query, new { Id = key }, _transaction);
+            var query = GetByIdQueryCache.GetOrAdd(typeof(T), BuildGetByIdQuery<T>);
+            return connection.QueryFirstOrDefault<T>(query, new { Id = id }, _transaction);
         }
 
-        public async Task<T> GetByIdAsync<T>(string Id)
+        public async Task<T> GetByIdAsync<T>(object id) where T : class
         {
-            object key = Id;
             var connection = await GetOpenConnectionAsync();
-            var query = GetByIdQueryCache.GetOrAdd(typeof(T), type =>
-            {
-                var tableName = GetTableName<T>();
-                var columns = string.Join(", ", typeof(T).GetProperties().Select(p => $"{GetColumnName(p)} AS {p.Name}"));
-                var primaryKeys = GetPrimaryKeyProperties<T>();
-                var whereClause = string.Join(" AND ", primaryKeys.Select(p => $"{GetColumnName(p)} = @{p.Name}"));
-                return $"SELECT {columns} FROM {tableName} WHERE {whereClause}";
-            });
-
-            var parameters = GetPrimaryKeyProperties<T>()
-                .ToDictionary(p => p.Name, p => key);
-
-            return await connection.QueryFirstOrDefaultAsync<T>(query, parameters, _transaction);
+            var query = GetByIdQueryCache.GetOrAdd(typeof(T), BuildGetByIdQuery<T>);
+            return await connection.QueryFirstOrDefaultAsync<T>(query, new { Id = id }, _transaction);
         }
-        //public T GetById<T>(T entity) where T : class
-        //{
-        //    var connection = GetOpenConnection();
-        //    var query = GetByIdQueryCache.GetOrAdd(typeof(T), type =>
-        //    {
-        //        var tableName = GetTableName<T>();
-        //        var columns = string.Join(", ", typeof(T).GetProperties().Select(p => $"{GetColumnName(p)} AS {p.Name}"));
-        //        var primaryKeys = GetPrimaryKeyProperties<T>();
-        //        var whereClause = string.Join(" AND ", primaryKeys.Select(p => $"{GetColumnName(p)} = @{p.Name}"));
-        //        return $"SELECT {columns} FROM {tableName} WHERE {whereClause}";
-        //    });
-
-        //    var parameters = GetPrimaryKeyProperties<T>()
-        //        .ToDictionary(p => p.Name, p => p.GetValue(entity));
-
-        //    return connection.QueryFirstOrDefault<T>(query, parameters, _transaction);
-        //}
         public T GetById<T>(T entity) where T : class
         {
             var connection = GetOpenConnection();
@@ -479,13 +279,6 @@ namespace EasyDapper.Implementations
             }
             return new QueryBuilder<T>(_lazyConnection.Value.ConnectionString);
         }
-        //public IStoredProcedureExecutor<T> CreateStoredProcedureExecutor<T>()
-        //{
-        //    if (_externalConnection != null)
-        //        throw new InvalidOperationException("Stored procedures are not supported when using an external connection.");
-
-        //    return StoredProcedureExecutorFactory.Create<T>(_lazyConnection.Value.ConnectionString);
-        //}
         public void Dispose()
         {
             _transaction?.Dispose();
@@ -553,23 +346,17 @@ namespace EasyDapper.Implementations
         }
         private string GetTableName<T>()
         {
-            var tableAttribute = typeof(T).GetCustomAttribute<TableAttribute>();
-            if (tableAttribute == null)
-            {
-                return $"[{typeof(T).Name}]";
-            }
-            var schema = string.IsNullOrWhiteSpace(tableAttribute.Schema)
-                ? null
-                : $"[{tableAttribute.Schema}]";
-
-            return schema == null
-                ? $"[{tableAttribute.TableName}]"
-                : $"{schema}.[{tableAttribute.TableName}]";
+            var tableAttr = typeof(T).GetCustomAttribute<TableAttribute>();
+            return tableAttr == null
+                ? $"[{typeof(T).Name}]"
+                : $"[{tableAttr.Schema}].[{tableAttr.TableName}]";
         }
         private string GetColumnName(PropertyInfo property)
         {
-            var columnAttribute = property.GetCustomAttribute<ColumnAttribute>();
-            return columnAttribute == null ? $"[{property.Name}]" : $"[{columnAttribute.ColumnName}]";
+            var columnAttr = property.GetCustomAttribute<ColumnAttribute>();
+            return columnAttr == null
+                ? $"[{property.Name}]"
+                : $"[{columnAttr.ColumnName}]";
         }
         private IEnumerable<PropertyInfo> GetPrimaryKeyProperties<T>()
         {
@@ -657,20 +444,6 @@ namespace EasyDapper.Implementations
                     p.GetCustomAttribute<IdentityAttribute>() != null &&
                     p.GetCustomAttribute<PrimaryKeyAttribute>() != null);
         }
-        private string BuildInsertQuery<T>(Type type)
-        {
-            var tableName = GetTableName<T>();
-            var properties = GetInsertProperties<T>();
-            var identityProp = GetIdentityProperty<T>();
-            var columns = string.Join(", ", properties.Select(p => GetColumnName(p)));
-            var values = string.Join(", ", properties.Select(p => $"@{p.Name}"));
-            if (identityProp != null)
-            {
-                var outputClause = $"OUTPUT INSERTED.{GetColumnName(identityProp)}";
-                return $"INSERT INTO {tableName} ({columns}) {outputClause} VALUES ({values})";
-            }
-            return $"INSERT INTO {tableName} ({columns}) VALUES ({values})";
-        }
         private void IsValidProcedureName(string procedureName)
         {
             //if (string.IsNullOrWhiteSpace(procedureName))
@@ -684,6 +457,128 @@ namespace EasyDapper.Implementations
             {
                 throw new ArgumentException("Procedure name is not valid", nameof(procedureName));
             }
+        }
+        private void CleanupTransaction()
+        {
+            _transaction?.Dispose();
+            _transaction = null;
+        }
+        private List<T> ValidateAndPrepareEntities<T>(IEnumerable<T> entities)
+        {
+            if (entities == null || !entities.Any())
+                throw new ArgumentException("Entities list cannot be null or empty", nameof(entities));
+
+            return entities.ToList();
+        }
+        private string BuildInsertQuery<T>(Type type)
+        {
+            var tableName = GetTableName<T>();
+            var properties = GetInsertProperties<T>();
+            var columns = string.Join(", ", properties.Select(GetColumnName));
+            var values = string.Join(", ", properties.Select(p => $"@{p.Name}"));
+
+            var identityProp = GetIdentityProperty<T>();
+            if (identityProp != null)
+            {
+                return $@"INSERT INTO {tableName} ({columns}) 
+                   VALUES ({values});
+                   SELECT CAST(SCOPE_IDENTITY() AS INT);";
+            }
+
+            return $"INSERT INTO {tableName} ({columns}) VALUES ({values})";
+        }
+        private string BuildBulkInsertQuery<T>(Type type)
+        {
+            var tableName = GetTableName<T>();
+            var properties = GetInsertProperties<T>();
+            var columns = string.Join(", ", properties.Select(GetColumnName));
+            var values = string.Join(", ", properties.Select(p => $"@{p.Name}"));
+            return $"INSERT INTO {tableName} ({columns}) VALUES ({values})";
+        }
+        private string BuildUpdateQuery<T>(Type type)
+        {
+            var tableName = GetTableName<T>();
+            var primaryKeys = GetPrimaryKeyProperties<T>();
+            var properties = typeof(T).GetProperties().Where(p => !IsPrimaryKey(p));
+
+            var setClause = string.Join(", ", properties.Select(p => $"{GetColumnName(p)} = @{p.Name}"));
+            var whereClause = string.Join(" AND ", primaryKeys.Select(p => $"{GetColumnName(p)} = @{p.Name}"));
+
+            return $"UPDATE {tableName} SET {setClause} WHERE {whereClause}";
+        }
+
+        private string BuildDeleteQuery<T>(Type type)
+        {
+            var tableName = GetTableName<T>();
+            var primaryKeys = GetPrimaryKeyProperties<T>();
+            var whereClause = string.Join(" AND ", primaryKeys.Select(p => $"{GetColumnName(p)} = @{p.Name}"));
+            return $"DELETE FROM {tableName} WHERE {whereClause}";
+        }
+        private string BuildGetByIdQuery<T>(Type type)
+        {
+            var tableName = GetTableName<T>();
+            var primaryKey = GetPrimaryKeyProperties<T>().Single();
+            var columns = string.Join(", ", typeof(T).GetProperties().Select(p => $"{GetColumnName(p)} AS {p.Name}"));
+            return $"SELECT {columns} FROM {tableName} WHERE {GetColumnName(primaryKey)} = @Id";
+        }
+
+        private DynamicParameters CreatePrimaryKeyParameters<T>(T entity)
+        {
+            var parameters = new DynamicParameters();
+            foreach (var pk in GetPrimaryKeyProperties<T>())
+            {
+                parameters.Add(pk.Name, pk.GetValue(entity));
+            }
+            return parameters;
+        }
+        private string BuildBatchInsertWithOutputQuery<T>()
+        {
+            return InsertQueryCache.GetOrAdd(typeof(T), type =>
+            {
+                var tableName = GetTableName<T>();
+                var properties = GetInsertProperties<T>();
+                var columns = string.Join(", ", properties.Select(GetColumnName));
+                var values = string.Join(", ", properties.Select(p => $"e.{GetColumnName(p)}"));
+                var outputColumn = GetColumnName(GetIdentityProperty<T>());
+                return $@"
+                    DECLARE @InsertedRows TABLE (Id INT);            
+                    INSERT INTO {tableName} ({columns})
+                    OUTPUT INSERTED.{outputColumn} INTO @InsertedRows
+                    SELECT {values}
+                    FROM OPENJSON(@Entities)
+                    WITH (
+                        {string.Join(", ", properties.Select(p => $"{GetColumnName(p)} {GetSqlType(p.PropertyType)}"))}
+                    ) AS e;            
+                    SELECT Id FROM @InsertedRows;";
+            });
+        }
+        private string GetSqlType(Type type)
+        {            
+            if (type == typeof(int)) return "INT";
+            if (type == typeof(long)) return "BIGINT";
+            if (type == typeof(short)) return "SMALLINT";
+            if (type == typeof(byte)) return "TINYINT";
+            if (type == typeof(bool)) return "BIT";
+            if (type == typeof(string)) return "NVARCHAR(MAX)";
+            if (type == typeof(char)) return "NCHAR(1)";
+            if (type == typeof(DateTime)) return "DATETIME";
+            if (type == typeof(DateTimeOffset)) return "DATETIMEOFFSET";
+            if (type == typeof(decimal)) return "DECIMAL(18, 2)";
+            if (type == typeof(float)) return "REAL";
+            if (type == typeof(double)) return "FLOAT";
+            if (type == typeof(Guid)) return "UNIQUEIDENTIFIER";
+            if (type == typeof(byte[])) return "VARBINARY(MAX)";
+            if (type == typeof(TimeSpan)) return "TIME";
+            if (type == typeof(object)) return "SQL_VARIANT";
+            if (Nullable.GetUnderlyingType(type) != null)
+            {
+                return GetSqlType(Nullable.GetUnderlyingType(type));
+            }
+            if (type.IsEnum)
+            {
+                return "INT";
+            }
+            throw new NotSupportedException($"Type {type.Name} is not supported");
         }
     }
 }

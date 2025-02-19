@@ -24,8 +24,8 @@ namespace EasyDapper.Interfaces
         Task<int> DeleteAsync<T>(T entity) where T : class;
         int DeleteList<T>(IEnumerable<T> entities) where T : class;
         Task<int> DeleteListAsync<T>(IEnumerable<T> entities) where T : class;
-        T GetById<T>(string Id);
-        Task<T> GetByIdAsync<T>(string Id);
+        T GetById<T>(object Id) where T : class;
+        Task<T> GetByIdAsync<T>(object Id) where T : class;
         T GetById<T>(T entity) where T : class;
         Task<T> GetByIdAsync<T>(T entity) where T : class;
         void BeginTransaction();
