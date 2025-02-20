@@ -6,6 +6,7 @@ using System.Data.SqlClient;
 using System.Linq;
 using System.Linq.Expressions;
 using System.Reflection;
+using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using Dapper;
@@ -20,19 +21,21 @@ namespace EasyDapper.Implementations
         private readonly List<string> _filters = new List<string>();
         private readonly Dictionary<string, object> _parameters = new Dictionary<string, object>();
         private readonly Lazy<IDbConnection> _lazyConnection;
-
-        public QueryBuilder(string connectionString)
+        private string _orderByClause = string.Empty;
+        private int? _limit = null;
+        private int? _offset = null;
+        private bool _isCountQuery = false;
+        private string _selectedColumns = "*";
+        private readonly List<JoinInfo> _joins = new List<JoinInfo>();
+        private readonly List<ApplyInfo> _applies = new List<ApplyInfo>();
+        private string _rowNumberClause = string.Empty;
+       internal QueryBuilder(string connectionString)
         {
-            //_connectionString = connectionString ?? throw new ArgumentNullException(nameof(connectionString));
             _lazyConnection = new Lazy<IDbConnection>(() => new SqlConnection(connectionString));
         }
-
         public IQueryBuilder<T> Where(Expression<Func<T, bool>> filter)
         {
-            if (filter == null)
-            {
-                throw new ArgumentNullException(nameof(filter));
-            }
+            if (filter == null) throw new ArgumentNullException(nameof(filter));
             var expression = ParseExpression(filter.Body);
             _filters.Add(expression);
             return this;
@@ -40,26 +43,245 @@ namespace EasyDapper.Implementations
 
         public IEnumerable<T> Execute()
         {
-            var query = BuildQuery();
+            var query = ((IQueryBuilder<T>)this).BuildQuery();
             var connection = GetOpenConnection();
             return connection.Query<T>(query, _parameters);
-
         }
 
         public async Task<IEnumerable<T>> ExecuteAsync()
         {
-            var query = BuildQuery();
+            var query = ((IQueryBuilder<T>)this).BuildQuery();
             var connection = GetOpenConnection();
             return await connection.QueryAsync<T>(query, _parameters);
-
+        }
+        public IQueryBuilder<T> Select(params Expression<Func<T, object>>[] columns)
+        {
+            var selectedColumns = new List<string>();
+            foreach (var column in columns)
+            {
+                var memberExpression = column.Body as MemberExpression;
+                if (memberExpression == null)
+                {
+                    throw new ArgumentException("Each column must be a member expression.");
+                }
+                selectedColumns.Add(ParseMember(memberExpression));
+            }
+            _selectedColumns = string.Join(", ", selectedColumns);
+            return this;
         }
 
-        private string BuildQuery()
+        public IQueryBuilder<T> Count()
         {
-            var tableName = GetTableName();
-            var columns = GetColumns();
+            _isCountQuery = true;
+            return this;
+        }
+
+        public IQueryBuilder<T> OrderBy(string orderByClause)
+        {
+            _orderByClause = "ORDER BY " + orderByClause;
+            return this;
+        }
+
+        public IQueryBuilder<T> Paging(int pageSize, int pageNumber = 1)
+        {
+            if (pageSize <= 0)
+            {
+                throw new ArgumentException("Page size must be greater than zero.");
+            }                
+            if (pageNumber <= 0)
+            {
+                throw new ArgumentException("Page number must be greater than zero.");
+            }                
+            _limit = pageSize;
+            _offset = (pageNumber - 1) * pageSize; // محاسبه Offset بر اساس شماره صفحه
+            return this;
+        }
+
+        public IQueryBuilder<T> InnerJoin<TJoin>(
+            Expression<Func<T, TJoin, bool>> onCondition)
+        {
+            AddJoin("INNER JOIN", onCondition);
+            return this;
+        }
+
+        public IQueryBuilder<T> LeftJoin<TJoin>(
+           Expression<Func<T, TJoin, bool>> onCondition)
+        {
+            AddJoin("LEFT JOIN", onCondition);
+            return this;
+        }
+        public IQueryBuilder<T> RightJoin<TJoin>(
+    Expression<Func<T, TJoin, bool>> onCondition)
+        {
+            AddJoin("RIGHT JOIN", onCondition);
+            return this;
+        }
+        public IQueryBuilder<T> FullJoin<TJoin>(
+    Expression<Func<T, TJoin, bool>> onCondition)
+        {
+            AddJoin("FULL JOIN", onCondition);
+            return this;
+        }
+        public IQueryBuilder<T> CrossApply<TSubQuery>(
+            Expression<Func<T, TSubQuery, bool>> onCondition,
+            Func<IQueryBuilder<TSubQuery>, IQueryBuilder<TSubQuery>> subQueryBuilder)
+        {
+            AddApply("CROSS APPLY", onCondition, subQueryBuilder);
+            return this;
+        }
+
+        public IQueryBuilder<T> OuterApply<TSubQuery>(
+            Expression<Func<T, TSubQuery, bool>> onCondition,
+            Func<IQueryBuilder<TSubQuery>, IQueryBuilder<TSubQuery>> subQueryBuilder)
+        {
+            AddApply("OUTER APPLY", onCondition, subQueryBuilder);
+            return this;
+        }
+        public int ExecuteRowCount()
+        {
+            var query = BuildRowCountQuery();
+            var connection = GetOpenConnection();
+            return connection.ExecuteScalar<int>(query, _parameters);
+        }
+        public IQueryBuilder<T> CustomJoin<TJoin>(
+            string joinType,
+            Expression<Func<T, TJoin, bool>> onCondition,
+            params Expression<Func<TJoin, bool>>[] additionalConditions)
+        {
+            var parsedOnCondition = ParseExpression(onCondition.Body);
+            var tableName = GetTableName(typeof(TJoin));
+            var alias = "t" + (_joins.Count + 1); // Generate unique alias
+
+            var onClause = parsedOnCondition.Replace("[", $"{alias}.");
+
+            // Add additional conditions to the ON clause
+            if (additionalConditions != null && additionalConditions.Length > 0)
+            {
+                foreach (var condition in additionalConditions)
+                {
+                    var parsedCondition = ParseExpression(condition.Body).Replace("[", $"{alias}.[");
+                    onClause += $" AND {parsedCondition}";
+                }
+            }
+
+            _joins.Add(new JoinInfo
+            {
+                JoinType = joinType,
+                TableName = tableName,
+                Alias = alias,
+                OnCondition = onClause
+            });
+
+            return this;
+        }
+        public IQueryBuilder<T> Row_Number(Expression<Func<T, object>> partitionBy, Expression<Func<T, object>> orderBy)
+        {
+            var partitionByColumn = ParseMember(partitionBy.Body);
+            var orderByColumn = ParseMember(orderBy.Body);
+            _rowNumberClause = $"ROW_NUMBER() OVER (PARTITION BY {partitionByColumn} ORDER BY {orderByColumn}) AS RowNumber";
+            return this;
+        }
+
+        private void AddJoin<TJoin>(
+            string joinType,
+            Expression<Func<T, TJoin, bool>> onCondition)
+        {
+            var parsedOnCondition = ParseExpression(onCondition.Body);
+            var tableName = GetTableName(typeof(TJoin));
+            var alias = "t" + (_joins.Count + 1); // Generate unique alias
+
+            // Replace aliases in the condition
+            parsedOnCondition = parsedOnCondition.Replace("[", $"{alias}.");
+
+            _joins.Add(new JoinInfo
+            {
+                JoinType = joinType,
+                TableName = tableName,
+                Alias = alias,
+                OnCondition = parsedOnCondition
+            });
+        }
+        private void AddApply<TSubQuery>(
+            string applyType,
+            Expression<Func<T, TSubQuery, bool>> onCondition,
+            Func<IQueryBuilder<TSubQuery>, IQueryBuilder<TSubQuery>> subQueryBuilder)
+        {
+            var subQueryInstance = new QueryBuilder<TSubQuery>("") as IQueryBuilder<TSubQuery>;
+            var subQuery = ((IQueryBuilder<TSubQuery>)subQueryBuilder(subQueryInstance)).BuildQuery(); // Explicit Call
+            var parsedOnCondition = ParseExpression(onCondition.Body);
+
+            var alias = "t" + (_applies.Count + 1); // Generate unique alias
+
+            // Replace aliases in the condition
+            parsedOnCondition = parsedOnCondition.Replace("[", $"{alias}.");
+
+            _applies.Add(new ApplyInfo
+            {
+                ApplyType = applyType,
+                SubQuery = $"({subQuery}) AS {alias} ON {parsedOnCondition}"
+            });
+        }
+
+        //private string BuildQuery()
+        //{
+        //    var tableName = GetTableName(typeof(T));
+        //    var columns = _isCountQuery ? "COUNT(*) AS TotalCount" : _selectedColumns;
+        //    var whereClause = _filters.Any() ? "WHERE " + string.Join(" AND ", _filters) : "";
+        //    var paginationClause = _limit.HasValue ? $"OFFSET {_offset} ROWS FETCH NEXT {_limit} ROWS ONLY" : "";
+
+        //    var sb = new StringBuilder();
+        //    sb.Append("SELECT ").Append(columns).Append(" FROM ").Append(tableName);
+
+        //    // Add JOINs
+        //    foreach (var join in _joins)
+        //    {
+        //        sb.Append(" ").Append(join.JoinType).Append(" ").Append(join.TableName).Append(" AS ").Append(join.Alias).Append(" ON ").Append(join.OnCondition);
+        //    }
+
+        //    // Add APPLYs
+        //    foreach (var apply in _applies)
+        //    {
+        //        sb.Append(" ").Append(apply.ApplyType).Append(" ").Append(apply.SubQuery);
+        //    }
+
+        //    if (!string.IsNullOrEmpty(whereClause)) sb.Append(" ").Append(whereClause);
+        //    if (!string.IsNullOrEmpty(_orderByClause)) sb.Append(" ").Append(_orderByClause);
+        //    if (!string.IsNullOrEmpty(paginationClause)) sb.Append(" ").Append(paginationClause);
+
+        //    return sb.ToString();
+        //}
+        // Explicit Implementation of BuildQuery
+        string IQueryBuilder<T>.BuildQuery()
+        {
+            var tableName = GetTableName(typeof(T));
+            var columns = _isCountQuery ? "COUNT(*) AS TotalCount" : _selectedColumns;            
+            if (!string.IsNullOrEmpty(_rowNumberClause))
+            {
+                columns = _rowNumberClause + ", " + columns;
+            }
             var whereClause = _filters.Any() ? "WHERE " + string.Join(" AND ", _filters) : "";
-            return $"SELECT {columns} FROM {tableName} {whereClause}";
+            var paginationClause = _limit.HasValue ? $"OFFSET {_offset} ROWS FETCH NEXT {_limit} ROWS ONLY" : "";
+            var sb = new StringBuilder();
+            sb.Append("SELECT ").Append(columns).Append(" FROM ").Append(tableName);
+            foreach (var join in _joins)
+            {
+                sb.Append(" ").Append(join.JoinType).Append(" ").Append(join.TableName).Append(" AS ").Append(join.Alias).Append(" ON ").Append(join.OnCondition);
+            }
+            foreach (var apply in _applies)
+            {
+                sb.Append(" ").Append(apply.ApplyType).Append(" ").Append(apply.SubQuery);
+            }
+            if (!string.IsNullOrEmpty(whereClause)) sb.Append(" ").Append(whereClause);
+            if (!string.IsNullOrEmpty(_orderByClause)) sb.Append(" ").Append(_orderByClause);
+            if (!string.IsNullOrEmpty(paginationClause)) sb.Append(" ").Append(paginationClause);
+            return sb.ToString();
+        }
+
+        private string BuildRowCountQuery()
+        {
+            var tableName = GetTableName(typeof(T));
+            var whereClause = _filters.Any() ? "WHERE " + string.Join(" AND ", _filters) : "";
+            return "SELECT COUNT(*) AS TotalCount FROM " + tableName + " " + whereClause;
         }
 
         private string ParseExpression(Expression expression)
@@ -92,14 +314,14 @@ namespace EasyDapper.Implementations
         private string HandleEqual(BinaryExpression expression)
         {
             if (IsNullConstant(expression.Right))
-                return $"{ParseMember(expression.Left)} IS NULL";
+                return ParseMember(expression.Left) + " IS NULL";
             return HandleBinary(expression, "=");
         }
 
         private string HandleNotEqual(BinaryExpression expression)
         {
             if (IsNullConstant(expression.Right))
-                return $"{ParseMember(expression.Left)} IS NOT NULL";
+                return ParseMember(expression.Left) + " IS NOT NULL";
             return HandleBinary(expression, "<>");
         }
 
@@ -107,22 +329,17 @@ namespace EasyDapper.Implementations
         {
             var left = ParseMember(expression.Left);
             var right = ParseValue(expression.Right);
-            return $"{left} {op} {right}";
+            return left + " " + op + " " + right;
         }
 
         private string HandleAnd(BinaryExpression expression)
         {
-            return Combine(expression.Left, expression.Right, "AND");
+            return "(" + ParseExpression(expression.Left) + " AND " + ParseExpression(expression.Right) + ")";
         }
 
         private string HandleOr(BinaryExpression expression)
         {
-            return Combine(expression.Left, expression.Right, "OR");
-        }
-
-        private string Combine(Expression left, Expression right, string op)
-        {
-            return $"({ParseExpression(left)} {op} {ParseExpression(right)})";
+            return "(" + ParseExpression(expression.Left) + " OR " + ParseExpression(expression.Right) + ")";
         }
 
         private string HandleMethodCall(MethodCallExpression expression)
@@ -130,11 +347,11 @@ namespace EasyDapper.Implementations
             switch (expression.Method.Name)
             {
                 case "StartsWith":
-                    return HandleStartsWith(expression);
+                    return HandleLike(expression, "{0}%");
                 case "EndsWith":
-                    return HandleEndsWith(expression);
+                    return HandleLike(expression, "%{0}");
                 case "Contains":
-                    return HandleContains(expression);
+                    return HandleLike(expression, "%{0}%");
                 case "IsNullOrEmpty":
                     return HandleIsNullOrEmpty(expression);
                 case "Between":
@@ -142,47 +359,19 @@ namespace EasyDapper.Implementations
                 default:
                     throw new NotSupportedException($"Method '{expression.Method.Name}' is not supported.");
             }
-
-        }
-
-        private string HandleStartsWith(MethodCallExpression expression)
-        {
-            return HandleLike(expression, "{0}%");
-        }
-
-        private string HandleEndsWith(MethodCallExpression expression)
-        {
-            return HandleLike(expression, "%{0}");
-        }
-
-        private string HandleContains(MethodCallExpression expression)
-        {
-            if (expression.Arguments[0] is NewArrayExpression)
-            {
-                return HandleIn(expression);
-            }
-            return HandleLike(expression, "%{0}%");
         }
 
         private string HandleLike(MethodCallExpression expression, string format)
         {
             var property = ParseMember(expression.Object);
             var value = ParseValue(expression.Arguments[0], format);
-            return $"{property} LIKE {value}";
-        }
-
-        private string HandleIn(MethodCallExpression expression)
-        {
-            var property = ParseMember(expression.Arguments[1]);
-            var values = (IEnumerable<object>)Expression.Lambda(expression.Arguments[0]).Compile().DynamicInvoke();
-            var parameters = values.Select(v => ParseValue(Expression.Constant(v))).ToList();
-            return $"{property} IN ({string.Join(", ", parameters)})";
+            return property + " LIKE " + value;
         }
 
         private string HandleIsNullOrEmpty(MethodCallExpression expression)
         {
             var property = ParseMember(expression.Arguments[0]);
-            return $"({property} IS NULL OR {property} = '')";
+            return "(" + property + " IS NULL OR " + property + " = '')";
         }
 
         private string HandleBetween(MethodCallExpression expression)
@@ -190,29 +379,39 @@ namespace EasyDapper.Implementations
             var property = ParseMember(expression.Arguments[0]);
             var lower = ParseValue(expression.Arguments[1]);
             var upper = ParseValue(expression.Arguments[2]);
-            return $"{property} BETWEEN {lower} AND {upper}";
+            return property + " BETWEEN " + lower + " AND " + upper;
         }
 
+        //private string ParseMember(Expression expression)
+        //{
+        //    if (expression is UnaryExpression unary)
+        //    {
+        //        return ParseMember(unary.Operand);
+        //    }
+        //    if (expression is MemberExpression member)
+        //    {
+        //        var property = member.Member as PropertyInfo;
+        //        return GetColumnName(property);
+        //    }
+        //    throw new NotSupportedException($"Unsupported member expression: {expression}");
+        //}
         private string ParseMember(Expression expression)
         {
             if (expression is UnaryExpression unary)
-            {
+            {                
                 return ParseMember(unary.Operand);
             }
             if (expression is MemberExpression member)
-            {
-                var property = member.Member as PropertyInfo;
-                return GetColumnName(property);
+            {                
+                return "[" + member.Member.Name + "]";
             }
-
-            throw new NotSupportedException($"Unsupported member expression: {expression}");
+            throw new NotSupportedException($"Unsupported expression: {expression}");
         }
 
         private string ParseValue(Expression expression, string format = null)
         {
             var value = Expression.Lambda(expression).Compile().DynamicInvoke();
-            var paramName = $"@p{_parameters.Count}";
-
+            var paramName = "@p" + _parameters.Count;
             if (format != null && value is string str)
             {
                 value = string.Format(format, str);
@@ -226,34 +425,27 @@ namespace EasyDapper.Implementations
             return expression is ConstantExpression constant && constant.Value == null;
         }
 
-        private string GetTableName()
+        private string GetTableName(Type type)
         {
-            var type = typeof(T);
             var table = type.GetCustomAttribute<TableAttribute>();
             var schema = table?.Schema;
             var name = table?.TableName ?? type.Name;
-
             return schema != null
-                ? $"[{Escape(schema)}].[{Escape(name)}]"
-                : $"[{Escape(name)}]";
-        }
-
-        private string GetColumns()
-        {
-            return string.Join(", ", typeof(T).GetProperties()
-                .Select(p => $"{GetColumnName(p)} AS [{p.Name}]"));
+                ? "[" + Escape(schema) + "].[" + Escape(name) + "]"
+                : "[" + Escape(name) + "]";
         }
 
         private string GetColumnName(PropertyInfo property)
         {
             var column = property.GetCustomAttribute<ColumnAttribute>();
-            return $"[{Escape(column?.ColumnName ?? property.Name)}]";
+            return "[" + Escape(column?.ColumnName ?? property.Name) + "]";
         }
 
         private static string Escape(string identifier)
         {
             return identifier?.Replace("]", "]]") ?? string.Empty;
         }
+
         private IDbConnection GetOpenConnection()
         {
             var connection = _lazyConnection.Value;
@@ -263,6 +455,7 @@ namespace EasyDapper.Implementations
             }
             return connection;
         }
+
         public void Dispose()
         {
             if (_lazyConnection?.IsValueCreated == true)
@@ -270,5 +463,21 @@ namespace EasyDapper.Implementations
                 _lazyConnection.Value.Dispose();
             }
         }
+        // کلاس برای ذخیره اطلاعات JOIN
+        private class JoinInfo
+        {
+            public string JoinType { get; set; }
+            public string TableName { get; set; }
+            public string Alias { get; set; }
+            public string OnCondition { get; set; }
+        }
+
+        // کلاس برای ذخیره اطلاعات APPLY
+        private class ApplyInfo
+        {
+            public string ApplyType { get; set; }
+            public string SubQuery { get; set; }
+        }
     }
+
 }
