@@ -29,7 +29,7 @@ namespace EasyDapper.Implementations
         private readonly List<JoinInfo> _joins = new List<JoinInfo>();
         private readonly List<ApplyInfo> _applies = new List<ApplyInfo>();
         private string _rowNumberClause = string.Empty;
-       internal QueryBuilder(string connectionString)
+        internal QueryBuilder(string connectionString)
         {
             _lazyConnection = new Lazy<IDbConnection>(() => new SqlConnection(connectionString));
         }
@@ -87,74 +87,55 @@ namespace EasyDapper.Implementations
             if (pageSize <= 0)
             {
                 throw new ArgumentException("Page size must be greater than zero.");
-            }                
+            }
             if (pageNumber <= 0)
             {
                 throw new ArgumentException("Page number must be greater than zero.");
-            }                
+            }
             _limit = pageSize;
             _offset = (pageNumber - 1) * pageSize; // محاسبه Offset بر اساس شماره صفحه
             return this;
         }
 
-        public IQueryBuilder<T> InnerJoin<TJoin>(
-            Expression<Func<T, TJoin, bool>> onCondition)
+        public IQueryBuilder<T> InnerJoin<TJoin>(Expression<Func<T, TJoin, bool>> onCondition)
         {
             AddJoin("INNER JOIN", onCondition);
             return this;
         }
 
-        public IQueryBuilder<T> LeftJoin<TJoin>(
-           Expression<Func<T, TJoin, bool>> onCondition)
+        public IQueryBuilder<T> LeftJoin<TJoin>(Expression<Func<T, TJoin, bool>> onCondition)
         {
             AddJoin("LEFT JOIN", onCondition);
             return this;
         }
-        public IQueryBuilder<T> RightJoin<TJoin>(
-    Expression<Func<T, TJoin, bool>> onCondition)
+        public IQueryBuilder<T> RightJoin<TJoin>(Expression<Func<T, TJoin, bool>> onCondition)
         {
             AddJoin("RIGHT JOIN", onCondition);
             return this;
         }
-        public IQueryBuilder<T> FullJoin<TJoin>(
-    Expression<Func<T, TJoin, bool>> onCondition)
+        public IQueryBuilder<T> FullJoin<TJoin>(Expression<Func<T, TJoin, bool>> onCondition)
         {
             AddJoin("FULL JOIN", onCondition);
             return this;
         }
-        public IQueryBuilder<T> CrossApply<TSubQuery>(
-            Expression<Func<T, TSubQuery, bool>> onCondition,
-            Func<IQueryBuilder<TSubQuery>, IQueryBuilder<TSubQuery>> subQueryBuilder)
+        public IQueryBuilder<T> CrossApply<TSubQuery>(Expression<Func<T, TSubQuery, bool>> onCondition, Func<IQueryBuilder<TSubQuery>, IQueryBuilder<TSubQuery>> subQueryBuilder)
         {
             AddApply("CROSS APPLY", onCondition, subQueryBuilder);
             return this;
         }
 
-        public IQueryBuilder<T> OuterApply<TSubQuery>(
-            Expression<Func<T, TSubQuery, bool>> onCondition,
-            Func<IQueryBuilder<TSubQuery>, IQueryBuilder<TSubQuery>> subQueryBuilder)
+        public IQueryBuilder<T> OuterApply<TSubQuery>(Expression<Func<T, TSubQuery, bool>> onCondition, Func<IQueryBuilder<TSubQuery>, IQueryBuilder<TSubQuery>> subQueryBuilder)
         {
             AddApply("OUTER APPLY", onCondition, subQueryBuilder);
             return this;
         }
-        public int ExecuteRowCount()
-        {
-            var query = BuildRowCountQuery();
-            var connection = GetOpenConnection();
-            return connection.ExecuteScalar<int>(query, _parameters);
-        }
-        public IQueryBuilder<T> CustomJoin<TJoin>(
-            string joinType,
-            Expression<Func<T, TJoin, bool>> onCondition,
-            params Expression<Func<TJoin, bool>>[] additionalConditions)
+
+        public IQueryBuilder<T> CustomJoin<TJoin>(string joinType, Expression<Func<T, TJoin, bool>> onCondition, params Expression<Func<TJoin, bool>>[] additionalConditions)
         {
             var parsedOnCondition = ParseExpression(onCondition.Body);
             var tableName = GetTableName(typeof(TJoin));
-            var alias = "t" + (_joins.Count + 1); // Generate unique alias
-
+            var alias = "t" + (_joins.Count + 1);
             var onClause = parsedOnCondition.Replace("[", $"{alias}.");
-
-            // Add additional conditions to the ON clause
             if (additionalConditions != null && additionalConditions.Length > 0)
             {
                 foreach (var condition in additionalConditions)
@@ -163,7 +144,6 @@ namespace EasyDapper.Implementations
                     onClause += $" AND {parsedCondition}";
                 }
             }
-
             _joins.Add(new JoinInfo
             {
                 JoinType = joinType,
@@ -171,7 +151,6 @@ namespace EasyDapper.Implementations
                 Alias = alias,
                 OnCondition = onClause
             });
-
             return this;
         }
         public IQueryBuilder<T> Row_Number(Expression<Func<T, object>> partitionBy, Expression<Func<T, object>> orderBy)
@@ -182,15 +161,11 @@ namespace EasyDapper.Implementations
             return this;
         }
 
-        private void AddJoin<TJoin>(
-            string joinType,
-            Expression<Func<T, TJoin, bool>> onCondition)
+        private void AddJoin<TJoin>(string joinType, Expression<Func<T, TJoin, bool>> onCondition)
         {
             var parsedOnCondition = ParseExpression(onCondition.Body);
             var tableName = GetTableName(typeof(TJoin));
-            var alias = "t" + (_joins.Count + 1); // Generate unique alias
-
-            // Replace aliases in the condition
+            var alias = "t" + (_joins.Count + 1);
             parsedOnCondition = parsedOnCondition.Replace("[", $"{alias}.");
 
             _joins.Add(new JoinInfo
@@ -201,18 +176,12 @@ namespace EasyDapper.Implementations
                 OnCondition = parsedOnCondition
             });
         }
-        private void AddApply<TSubQuery>(
-            string applyType,
-            Expression<Func<T, TSubQuery, bool>> onCondition,
-            Func<IQueryBuilder<TSubQuery>, IQueryBuilder<TSubQuery>> subQueryBuilder)
+        private void AddApply<TSubQuery>(string applyType, Expression<Func<T, TSubQuery, bool>> onCondition, Func<IQueryBuilder<TSubQuery>, IQueryBuilder<TSubQuery>> subQueryBuilder)
         {
             var subQueryInstance = new QueryBuilder<TSubQuery>("") as IQueryBuilder<TSubQuery>;
             var subQuery = ((IQueryBuilder<TSubQuery>)subQueryBuilder(subQueryInstance)).BuildQuery(); // Explicit Call
             var parsedOnCondition = ParseExpression(onCondition.Body);
-
-            var alias = "t" + (_applies.Count + 1); // Generate unique alias
-
-            // Replace aliases in the condition
+            var alias = "t" + (_applies.Count + 1);
             parsedOnCondition = parsedOnCondition.Replace("[", $"{alias}.");
 
             _applies.Add(new ApplyInfo
@@ -222,66 +191,25 @@ namespace EasyDapper.Implementations
             });
         }
 
-        //private string BuildQuery()
-        //{
-        //    var tableName = GetTableName(typeof(T));
-        //    var columns = _isCountQuery ? "COUNT(*) AS TotalCount" : _selectedColumns;
-        //    var whereClause = _filters.Any() ? "WHERE " + string.Join(" AND ", _filters) : "";
-        //    var paginationClause = _limit.HasValue ? $"OFFSET {_offset} ROWS FETCH NEXT {_limit} ROWS ONLY" : "";
-
-        //    var sb = new StringBuilder();
-        //    sb.Append("SELECT ").Append(columns).Append(" FROM ").Append(tableName);
-
-        //    // Add JOINs
-        //    foreach (var join in _joins)
-        //    {
-        //        sb.Append(" ").Append(join.JoinType).Append(" ").Append(join.TableName).Append(" AS ").Append(join.Alias).Append(" ON ").Append(join.OnCondition);
-        //    }
-
-        //    // Add APPLYs
-        //    foreach (var apply in _applies)
-        //    {
-        //        sb.Append(" ").Append(apply.ApplyType).Append(" ").Append(apply.SubQuery);
-        //    }
-
-        //    if (!string.IsNullOrEmpty(whereClause)) sb.Append(" ").Append(whereClause);
-        //    if (!string.IsNullOrEmpty(_orderByClause)) sb.Append(" ").Append(_orderByClause);
-        //    if (!string.IsNullOrEmpty(paginationClause)) sb.Append(" ").Append(paginationClause);
-
-        //    return sb.ToString();
-        //}
-        // Explicit Implementation of BuildQuery
         string IQueryBuilder<T>.BuildQuery()
         {
-            var tableName = GetTableName(typeof(T));
-            var columns = _isCountQuery ? "COUNT(*) AS TotalCount" : _selectedColumns;            
-            if (!string.IsNullOrEmpty(_rowNumberClause))
-            {
-                columns = _rowNumberClause + ", " + columns;
-            }
-            var whereClause = _filters.Any() ? "WHERE " + string.Join(" AND ", _filters) : "";
-            var paginationClause = _limit.HasValue ? $"OFFSET {_offset} ROWS FETCH NEXT {_limit} ROWS ONLY" : "";
+            var selectClause = BuildSelectClause();
+            var fromClause = BuildFromClause();
+            var joinClauses = BuildJoinClauses();
+            var applyClauses = BuildApplyClauses();
+            var whereClause = BuildWhereClause();
+            var orderByClause = BuildOrderByClause();
+            var paginationClause = BuildPaginationClause();
             var sb = new StringBuilder();
-            sb.Append("SELECT ").Append(columns).Append(" FROM ").Append(tableName);
-            foreach (var join in _joins)
-            {
-                sb.Append(" ").Append(join.JoinType).Append(" ").Append(join.TableName).Append(" AS ").Append(join.Alias).Append(" ON ").Append(join.OnCondition);
-            }
-            foreach (var apply in _applies)
-            {
-                sb.Append(" ").Append(apply.ApplyType).Append(" ").Append(apply.SubQuery);
-            }
+            sb.Append(selectClause)
+              .Append(fromClause)
+              .Append(joinClauses)
+              .Append(applyClauses);
             if (!string.IsNullOrEmpty(whereClause)) sb.Append(" ").Append(whereClause);
-            if (!string.IsNullOrEmpty(_orderByClause)) sb.Append(" ").Append(_orderByClause);
+            if (!string.IsNullOrEmpty(orderByClause)) sb.Append(" ").Append(orderByClause);
             if (!string.IsNullOrEmpty(paginationClause)) sb.Append(" ").Append(paginationClause);
-            return sb.ToString();
-        }
 
-        private string BuildRowCountQuery()
-        {
-            var tableName = GetTableName(typeof(T));
-            var whereClause = _filters.Any() ? "WHERE " + string.Join(" AND ", _filters) : "";
-            return "SELECT COUNT(*) AS TotalCount FROM " + tableName + " " + whereClause;
+            return sb.ToString();
         }
 
         private string ParseExpression(Expression expression)
@@ -398,11 +326,11 @@ namespace EasyDapper.Implementations
         private string ParseMember(Expression expression)
         {
             if (expression is UnaryExpression unary)
-            {                
+            {
                 return ParseMember(unary.Operand);
             }
             if (expression is MemberExpression member)
-            {                
+            {
                 return "[" + member.Member.Name + "]";
             }
             throw new NotSupportedException($"Unsupported expression: {expression}");
@@ -455,6 +383,71 @@ namespace EasyDapper.Implementations
             }
             return connection;
         }
+        private string BuildSelectClause()
+        {
+            var columns = _isCountQuery ? "COUNT(*) AS TotalCount" : _selectedColumns;
+            if (!string.IsNullOrEmpty(_rowNumberClause))
+            {
+                columns = _rowNumberClause + ", " + columns;
+            }
+            return "SELECT " + columns;
+        }
+
+        private string BuildFromClause()
+        {
+            var tableName = GetTableName(typeof(T));
+            return " FROM " + tableName;
+        }
+
+        private string BuildJoinClauses()
+        {
+            var sb = new StringBuilder();
+            foreach (var join in _joins)
+            {
+                sb.Append(" ")
+                  .Append(join.JoinType)
+                  .Append(" ")
+                  .Append(join.TableName)
+                  .Append(" AS ")
+                  .Append(join.Alias)
+                  .Append(" ON ")
+                  .Append(join.OnCondition);
+            }
+            return sb.ToString();
+        }
+
+        private string BuildApplyClauses()
+        {
+            var sb = new StringBuilder();
+            foreach (var apply in _applies)
+            {
+                sb.Append(" ")
+                  .Append(apply.ApplyType)
+                  .Append(" ")
+                  .Append(apply.SubQuery);
+            }
+            return sb.ToString();
+        }
+
+        private string BuildWhereClause()
+        {
+            return _filters.Any() ? "WHERE " + string.Join(" AND ", _filters) : "";
+        }
+
+        private string BuildOrderByClause()
+        {
+            return !string.IsNullOrEmpty(_orderByClause) ? "ORDER BY " + _orderByClause : "";
+        }
+
+        private string BuildPaginationClause()
+        {
+            if (_limit.HasValue)
+            {
+                return $"OFFSET {_offset} ROWS FETCH NEXT {_limit} ROWS ONLY";
+            }
+            return "";
+        }
+
 
         public void Dispose()
         {
