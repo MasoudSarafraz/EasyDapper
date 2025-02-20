@@ -132,35 +132,75 @@ namespace EasyDapper.Implementations
             }
             return await connection.ExecuteAsync(query, entity, _transaction);
         }
+        //public int InsertList<T>(IEnumerable<T> entities) where T : class
+        //{
+        //    var entityList = ValidateAndPrepareEntities(entities);
+        //    var connection = GetOpenConnection();
+        //    var identityProp = GetIdentityProperty<T>();
+        //    if (identityProp != null)
+        //    {
+        //        var query = BuildBatchInsertWithOutputQuery<T>();
+        //        var parameters = new { Entities = entityList };
+        //        var generatedIds = connection.Query<int>(query, parameters, _transaction).ToList();
+        //        for (int i = 0; i < entityList.Count; i++)
+        //        {
+        //            identityProp.SetValue(entityList[i], generatedIds[i]);
+        //        }
+        //        return entityList.Count;
+        //    }
+        //    var bulkQuery = BulkInsertQueryCache.GetOrAdd(typeof(T), BuildBulkInsertQuery<T>);
+        //    return connection.Execute(bulkQuery, entityList, _transaction);
+        //}
         public int InsertList<T>(IEnumerable<T> entities) where T : class
         {
-            var entityList = ValidateAndPrepareEntities(entities);
-            var connection = GetOpenConnection();
+            var entityList = entities.ToList();
+            if (entityList.Count == 0) return 0;
+            var connection = GetOpenConnection() as SqlConnection;
             var identityProp = GetIdentityProperty<T>();
             if (identityProp != null)
-            {
-                var query = BuildBatchInsertWithOutputQuery<T>();
-                var parameters = new { Entities = entityList };
+            {  
+                var query = BuildOptimizedBatchInsertQuery<T>(entityList.Count);
+                var parameters = CreateOptimizedParameters(entityList);
                 var generatedIds = connection.Query<int>(query, parameters, _transaction).ToList();
-                for (int i = 0; i < entityList.Count; i++)
+                Parallel.For(0, entityList.Count, i =>
                 {
                     identityProp.SetValue(entityList[i], generatedIds[i]);
-                }
+                });
                 return entityList.Count;
             }
+            //return connection.Execute(BuildBulkInsertQuery<T>(), entityList, _transaction);
             var bulkQuery = BulkInsertQueryCache.GetOrAdd(typeof(T), BuildBulkInsertQuery<T>);
             return connection.Execute(bulkQuery, entityList, _transaction);
         }
+        //public async Task<int> InsertListAsync<T>(IEnumerable<T> entities) where T : class
+        //{
+        //    var entityList = ValidateAndPrepareEntities(entities);
+        //    var connection = await GetOpenConnectionAsync();
+        //    var identityProp = GetIdentityProperty<T>();
+        //    if (identityProp != null)
+        //    {
+        //        var query = BuildBatchInsertWithOutputQuery<T>();
+        //        var parameters = new { Entities = entityList };
+        //        var generatedIds = (await connection.QueryAsync<int>(query, parameters, _transaction)).ToList();
+        //        for (int i = 0; i < entityList.Count; i++)
+        //        {
+        //            identityProp.SetValue(entityList[i], generatedIds[i]);
+        //        }
+        //        return entityList.Count;
+        //    }
+        //    var bulkQuery = BulkInsertQueryCache.GetOrAdd(typeof(T), BuildBulkInsertQuery<T>);
+        //    return await connection.ExecuteAsync(bulkQuery, entityList, _transaction);
+        //}
         public async Task<int> InsertListAsync<T>(IEnumerable<T> entities) where T : class
         {
-            var entityList = ValidateAndPrepareEntities(entities);
-            var connection = await GetOpenConnectionAsync();
+            var entityList = entities.ToList();
+            if (entityList.Count == 0) return 0;
+            var connection = await GetOpenConnectionAsync() as SqlConnection;
             var identityProp = GetIdentityProperty<T>();
-
             if (identityProp != null)
-            {
-                var query = BuildBatchInsertWithOutputQuery<T>();
-                var parameters = new { Entities = entityList };
+            {                
+                var query = BuildOptimizedBatchInsertQuery<T>(entityList.Count);                
+                var parameters = CreateParametersAsync(entityList);                
                 var generatedIds = (await connection.QueryAsync<int>(query, parameters, _transaction)).ToList();
                 for (int i = 0; i < entityList.Count; i++)
                 {
@@ -168,6 +208,7 @@ namespace EasyDapper.Implementations
                 }
                 return entityList.Count;
             }
+            //return await connection.ExecuteAsync(BuildBulkInsertQuery<T>(), entityList, _transaction);
             var bulkQuery = BulkInsertQueryCache.GetOrAdd(typeof(T), BuildBulkInsertQuery<T>);
             return await connection.ExecuteAsync(bulkQuery, entityList, _transaction);
         }
@@ -579,6 +620,54 @@ namespace EasyDapper.Implementations
                 return "INT";
             }
             throw new NotSupportedException($"Type {type.Name} is not supported");
+        }
+        private string BuildOptimizedBatchInsertQuery<T>(int count)
+        {
+            var tableName = GetTableName<T>();
+            var properties = GetInsertProperties<T>().ToList();
+            var outputColumn = GetColumnName(GetIdentityProperty<T>());
+            var columns = string.Join(", ", properties.Select(GetColumnName));
+            var values = new StringBuilder("VALUES ");
+            for (int i = 0; i < count; i++)
+            {
+                var rowValues = string.Join(", ", properties.Select(p => $"@p{i}_{p.Name}"));
+                values.AppendLine($"({rowValues}){(i < count - 1 ? "," : "")}");
+            }
+            return $@"
+                DECLARE @InsertedRows TABLE (Id INT);
+        
+                INSERT INTO {tableName} ({columns})
+                OUTPUT INSERTED.{outputColumn} INTO @InsertedRows
+                {values}
+        
+                SELECT Id FROM @InsertedRows 
+                ORDER BY Id ASC;"; // حفظ ترتیب درج
+        }
+        private DynamicParameters CreateOptimizedParameters<T>(List<T> entities)
+        {
+            var parameters = new DynamicParameters();
+            var properties = GetInsertProperties<T>().ToList();
+            Parallel.For(0, entities.Count, i =>
+            {
+                foreach (var prop in properties)
+                {
+                    parameters.Add($"p{i}_{prop.Name}", prop.GetValue(entities[i]));
+                }
+            });
+            return parameters;
+        }
+        private DynamicParameters CreateParametersAsync<T>(List<T> entities)
+        {
+            var parameters = new DynamicParameters();
+            var properties = GetInsertProperties<T>().ToList();
+            for (int i = 0; i < entities.Count; i++)
+            {
+                foreach (var prop in properties)
+                {
+                    parameters.Add($"p{i}_{prop.Name}", prop.GetValue(entities[i]));
+                }
+            }
+            return parameters;
         }
     }
 }
