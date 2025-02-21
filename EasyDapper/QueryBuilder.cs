@@ -31,14 +31,14 @@ namespace EasyDapper
         private readonly List<string> _groupByColumns = new List<string>();
         private string _havingClause = string.Empty;
 
-        internal QueryBuilder(string connectionString)
-        {
-            if (string.IsNullOrEmpty(connectionString))
-            {
-                throw new ArgumentNullException("connectionString cannot be null or empty.");
-            }
-            _lazyConnection = new Lazy<IDbConnection>(() => new SqlConnection(connectionString));
-        }
+        //internal QueryBuilder(string connectionString)
+        //{
+        //    if (string.IsNullOrEmpty(connectionString))
+        //    {
+        //        throw new ArgumentNullException("connectionString cannot be null or empty.");
+        //    }
+        //    _lazyConnection = new Lazy<IDbConnection>(() => new SqlConnection(connectionString));
+        //}
         internal QueryBuilder(IDbConnection connection)
         {
             if (connection == null)
@@ -205,7 +205,7 @@ namespace EasyDapper
         }
         private void AddApply<TSubQuery>(string applyType, Expression<Func<T, TSubQuery, bool>> onCondition, Func<IQueryBuilder<TSubQuery>, IQueryBuilder<TSubQuery>> subQueryBuilder)
         {
-            var subQueryInstance = new QueryBuilder<TSubQuery>("") as IQueryBuilder<TSubQuery>;
+            var subQueryInstance = new QueryBuilder<TSubQuery>(_lazyConnection.Value) as IQueryBuilder<TSubQuery>;
             var subQuery = ((IQueryBuilder<TSubQuery>)subQueryBuilder(subQueryInstance)).BuildQuery(); // Explicit Call
             var parsedOnCondition = ParseExpression(onCondition.Body);
             var alias = "t" + (_applies.Count + 1);
@@ -472,6 +472,7 @@ namespace EasyDapper
                 connection.Open();
             }
             return connection;
+
         }
         private string BuildSelectClause()
         {

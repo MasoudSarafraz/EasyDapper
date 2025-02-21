@@ -304,7 +304,7 @@ namespace EasyDapper
             {
                 return new QueryBuilder<T>(_externalConnection);
             }
-            return new QueryBuilder<T>(_lazyConnection.Value.ConnectionString);
+            return new QueryBuilder<T>(_lazyConnection.Value);
         }
         public IEnumerable<T> ExecuteStoredProcedure<T>(string procedureName, object parameters = null)
         {
@@ -396,7 +396,7 @@ namespace EasyDapper
         {
             return typeof(T).GetProperties().Where(p => p.GetCustomAttribute<IdentityAttribute>() == null);
         }
-        private IDbConnection GetOpenConnection()
+        internal IDbConnection GetOpenConnection()
         {
             if (_externalConnection != null)
             {
