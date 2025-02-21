@@ -22,12 +22,14 @@ namespace EasyDapper
         private readonly IDbConnection _externalConnection;
         private readonly Lazy<IDbConnection> _lazyConnection;
         private IDbTransaction _transaction;
+        private int _transactionCount = 0;
+        private readonly Stack<string> _savePoints = new Stack<string>();
         private static readonly ConcurrentDictionary<Type, string> InsertQueryCache = new ConcurrentDictionary<Type, string>();
         private static readonly ConcurrentDictionary<Type, string> UpdateQueryCache = new ConcurrentDictionary<Type, string>();
         private static readonly ConcurrentDictionary<Type, string> DeleteQueryCache = new ConcurrentDictionary<Type, string>();
         private static readonly ConcurrentDictionary<Type, string> GetByIdQueryCache = new ConcurrentDictionary<Type, string>();
         private static readonly ConcurrentDictionary<Type, string> BulkInsertQueryCache = new ConcurrentDictionary<Type, string>();
-        private int BATCH_SIZE = 500;
+        private int BATCH_SIZE = 100;
 
         public DapperService(string connectionString)
         {
@@ -150,8 +152,8 @@ namespace EasyDapper
                 }
                 else
                 {
-                    var bulkQuery = BulkInsertQueryCache.GetOrAdd(typeof(T), BuildBulkInsertQuery<T>);
-                    totalInserted += connection.Execute(bulkQuery, batch, _transaction);
+                    var simpleQuery = BulkInsertQueryCache.GetOrAdd(typeof(T), BuildSimpleInsertQuery<T>);
+                    totalInserted += connection.Execute(simpleQuery, batch, _transaction);
                 }
             }
             return entityList.Count;
@@ -180,8 +182,8 @@ namespace EasyDapper
                 }
                 else
                 {
-                    var bulkQuery = BulkInsertQueryCache.GetOrAdd(typeof(T), BuildBulkInsertQuery<T>);
-                    totalInserted += connection.Execute(bulkQuery, batch, _transaction);
+                    var simpleQuery = BulkInsertQueryCache.GetOrAdd(typeof(T), BuildSimpleInsertQuery<T>);
+                    totalInserted += connection.Execute(simpleQuery, batch, _transaction);
                 }
             }
             return entityList.Count;
@@ -496,7 +498,7 @@ namespace EasyDapper
 
             return $"INSERT INTO {tableName} ({columns}) VALUES ({values})";
         }
-        private string BuildBulkInsertQuery<T>(Type type)
+        private string BuildSimpleInsertQuery<T>(Type type)
         {
             var tableName = GetTableName<T>();
             var properties = GetInsertProperties<T>();
@@ -513,7 +515,6 @@ namespace EasyDapper
             var whereClause = string.Join(" AND ", primaryKeys.Select(p => $"{GetColumnName(p)} = @{p.Name}"));
             return $"UPDATE {tableName} SET {setClause} WHERE {whereClause}";
         }
-
         private string BuildDeleteQuery<T>(Type type)
         {
             var tableName = GetTableName<T>();
