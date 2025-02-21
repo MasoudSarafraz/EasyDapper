@@ -27,6 +27,7 @@ namespace EasyDapper
         private static readonly ConcurrentDictionary<Type, string> DeleteQueryCache = new ConcurrentDictionary<Type, string>();
         private static readonly ConcurrentDictionary<Type, string> GetByIdQueryCache = new ConcurrentDictionary<Type, string>();
         private static readonly ConcurrentDictionary<Type, string> BulkInsertQueryCache = new ConcurrentDictionary<Type, string>();
+        private int BATCH_SIZE = 500;
 
         public DapperService(string connectionString)
         {
@@ -132,41 +133,58 @@ namespace EasyDapper
             if (entityList.Count == 0) return 0;
             var connection = GetOpenConnection() as SqlConnection;
             var identityProp = GetIdentityProperty<T>();
-            if (identityProp != null)
-            {  
-                var query = BuildOptimizedBatchInsertQuery<T>(entityList.Count);
-                var parameters = CreateOptimizedParameters(entityList);
-                var generatedIds = connection.Query<int>(query, parameters, _transaction).ToList();
-                Parallel.For(0, entityList.Count, i =>
+            int totalInserted = 0;
+            for (int i = 0; i < entityList.Count; i += BATCH_SIZE)
+            {
+                //var batch = entityList.Skip(i).Take(BATCH_SIZE).ToList();
+                var batch = entityList.GetRange(i, Math.Min(BATCH_SIZE, entityList.Count - i));
+                if (identityProp != null)
                 {
-                    identityProp.SetValue(entityList[i], generatedIds[i]);
-                });
-                return entityList.Count;
+                    var query = BuildOptimizedBatchInsertQuery<T>(batch.Count);
+                    var parameters = CreateOptimizedParameters(batch);
+                    var generatedIds = connection.Query<int>(query, parameters, _transaction).ToList();
+                    Parallel.For(0, batch.Count, j =>
+                    {
+                        identityProp.SetValue(batch[j], generatedIds[j]);
+                    });
+                }
+                else
+                {
+                    var bulkQuery = BulkInsertQueryCache.GetOrAdd(typeof(T), BuildBulkInsertQuery<T>);
+                    totalInserted += connection.Execute(bulkQuery, batch, _transaction);
+                }
             }
-            //return connection.Execute(BuildBulkInsertQuery<T>(), entityList, _transaction);
-            var bulkQuery = BulkInsertQueryCache.GetOrAdd(typeof(T), BuildBulkInsertQuery<T>);
-            return connection.Execute(bulkQuery, entityList, _transaction);
+            return entityList.Count;
         }
+
         public async Task<int> InsertListAsync<T>(IEnumerable<T> entities) where T : class
         {
             var entityList = entities.ToList();
             if (entityList.Count == 0) return 0;
-            var connection = await GetOpenConnectionAsync() as SqlConnection;
+            var connection = await GetOpenConnectionAsync();
             var identityProp = GetIdentityProperty<T>();
-            if (identityProp != null)
-            {                
-                var query = BuildOptimizedBatchInsertQuery<T>(entityList.Count);                
-                var parameters = CreateParametersAsync(entityList);                
-                var generatedIds = (await connection.QueryAsync<int>(query, parameters, _transaction)).ToList();
-                for (int i = 0; i < entityList.Count; i++)
+            int totalInserted = 0;
+            for (int i = 0; i < entityList.Count; i += BATCH_SIZE)
+            {
+                //var batch = entityList.Skip(i).Take(BATCH_SIZE).ToList();
+                var batch = entityList.GetRange(i, Math.Min(BATCH_SIZE, entityList.Count - i));
+                if (identityProp != null)
                 {
-                    identityProp.SetValue(entityList[i], generatedIds[i]);
+                    var query = BuildOptimizedBatchInsertQuery<T>(batch.Count);
+                    var parameters = await CreateParametersAsync(batch);
+                    var generatedIds = (await connection.QueryAsync<int>(query, parameters, _transaction)).ToList();
+                    for (int j = 0; j < batch.Count; j++)
+                    {
+                        identityProp.SetValue(entityList[j], generatedIds[j]);
+                    }
                 }
-                return entityList.Count;
+                else
+                {
+                    var bulkQuery = BulkInsertQueryCache.GetOrAdd(typeof(T), BuildBulkInsertQuery<T>);
+                    totalInserted += connection.Execute(bulkQuery, batch, _transaction);
+                }
             }
-            //return await connection.ExecuteAsync(BuildBulkInsertQuery<T>(), entityList, _transaction);
-            var bulkQuery = BulkInsertQueryCache.GetOrAdd(typeof(T), BuildBulkInsertQuery<T>);
-            return await connection.ExecuteAsync(bulkQuery, entityList, _transaction);
+            return entityList.Count;
         }
         public int Update<T>(T entity) where T : class
         {
@@ -302,7 +320,7 @@ namespace EasyDapper
                 cancellationToken: cancellationToken
             )
             ).ConfigureAwait(false);
-        }        
+        }
         public T ExecuteMultiResultStoredProcedure<T>(string procedureName, Func<SqlMapper.GridReader, T> mapper, object parameters = null, IDbTransaction transaction = null, int? commandTimeout = null)
         {
             IsValidProcedureName(procedureName);
@@ -392,7 +410,7 @@ namespace EasyDapper
                 if (_externalConnection.State != ConnectionState.Open)
                 {
                     _externalConnection.Open();
-                }                    
+                }
                 return _externalConnection;
             }
             var connection = _lazyConnection.Value;
@@ -401,11 +419,11 @@ namespace EasyDapper
                 if (connection is SqlConnection sqlConnection)
                 {
                     await sqlConnection.OpenAsync().ConfigureAwait(false);
-                }                    
+                }
                 else
                 {
                     connection.Open();
-                }                    
+                }
             }
             return connection;
         }
@@ -541,7 +559,7 @@ namespace EasyDapper
             });
         }
         private string GetSqlType(Type type)
-        {            
+        {
             if (type == typeof(int)) return "INT";
             if (type == typeof(long)) return "BIGINT";
             if (type == typeof(short)) return "SMALLINT";
@@ -594,16 +612,18 @@ namespace EasyDapper
         {
             var parameters = new DynamicParameters();
             var properties = GetInsertProperties<T>().ToList();
-            Parallel.For(0, entities.Count, i =>
+
+            for (int i = 0; i < entities.Count; i++)
             {
                 foreach (var prop in properties)
                 {
                     parameters.Add($"p{i}_{prop.Name}", prop.GetValue(entities[i]));
                 }
-            });
+            }
+
             return parameters;
         }
-        private DynamicParameters CreateParametersAsync<T>(List<T> entities)
+        private async Task<DynamicParameters> CreateParametersAsync<T>(List<T> entities)
         {
             var parameters = new DynamicParameters();
             var properties = GetInsertProperties<T>().ToList();
