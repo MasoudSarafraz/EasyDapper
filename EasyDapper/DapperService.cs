@@ -30,7 +30,7 @@ namespace EasyDapper
         private static readonly ConcurrentDictionary<Type, string> GetByIdQueryCache = new ConcurrentDictionary<Type, string>();
         private static readonly ConcurrentDictionary<Type, string> BulkInsertQueryCache = new ConcurrentDictionary<Type, string>();
         private int BATCH_SIZE = 100;
-
+        public int TransactionCount() => _transactionCount;
         public DapperService(string connectionString)
         {
             _lazyConnection = new Lazy<IDbConnection>(() => new SqlConnection(connectionString));
@@ -41,53 +41,70 @@ namespace EasyDapper
         }
         public void BeginTransaction()
         {
-            if (_transaction != null)
-                throw new InvalidOperationException("A transaction is already in progress.");
-
             var connection = GetOpenConnection();
-            _transaction = connection.BeginTransaction();
-        }
-        public async Task BeginTransactionAsync()
-        {
-            if (_transaction != null)
-                throw new InvalidOperationException("A transaction is already in progress.");
-
-            var connection = await GetOpenConnectionAsync();
-            _transaction = connection.BeginTransaction();
+            if (_transaction == null)
+            {
+                _transaction = connection.BeginTransaction();
+            }
+            else
+            {
+                var savePointName = $"SavePoint{_transactionCount}";
+                ExecuteCommand($"SAVE TRANSACTION {savePointName}");
+                _savePoints.Push(savePointName);
+            }
+            _transactionCount++;
         }
         public void CommitTransaction()
         {
             if (_transaction == null)
+            {
                 throw new InvalidOperationException("No transaction is in progress.");
-
-            try
+            }                
+            if (_transactionCount <= 0)
+            {
+                throw new InvalidOperationException("No active transactions to commit.");
+            }                
+            _transactionCount--;
+            if (_transactionCount == 0)
             {
                 _transaction.Commit();
-            }
-            catch
-            {
-                _transaction.Rollback();
-                throw;
-            }
-            finally
-            {
                 CleanupTransaction();
+            }
+            else
+            {
+                _savePoints.Pop();
             }
         }
         public void RollbackTransaction()
         {
             if (_transaction == null)
+            {
                 throw new InvalidOperationException("No transaction is in progress.");
-
+            }                
             try
             {
-                _transaction.Rollback();
+                if (_transactionCount > 0)
+                {
+                    if (_savePoints.Count > 0)
+                    {
+                        var savePointName = _savePoints.Pop();
+                        ExecuteCommand($"ROLLBACK TRANSACTION {savePointName}");
+                    }
+                    else
+                    {
+                        _transaction.Rollback();
+                    }
+                }
             }
             finally
             {
-                CleanupTransaction();
+                _transactionCount--;
+                if (_transactionCount == 0)
+                {
+                    CleanupTransaction();
+                }
             }
-        }
+        }        
         //public int Insert<T>(T entity) where T : class
         //{
         //    var connection = GetOpenConnection();
@@ -158,7 +175,6 @@ namespace EasyDapper
             }
             return entityList.Count;
         }
-
         public async Task<int> InsertListAsync<T>(IEnumerable<T> entities) where T : class
         {
             var entityList = entities.ToList();
@@ -286,17 +302,9 @@ namespace EasyDapper
         {
             if (_externalConnection != null)
             {
-                throw new InvalidOperationException("QueryBuilder is not supported when using an external connection.");
+                return new QueryBuilder<T>(_externalConnection);
             }
             return new QueryBuilder<T>(_lazyConnection.Value.ConnectionString);
-        }
-        public void Dispose()
-        {
-            _transaction?.Dispose();
-            if (_lazyConnection?.IsValueCreated == true)
-            {
-                _lazyConnection.Value.Dispose();
-            }
         }
         public IEnumerable<T> ExecuteStoredProcedure<T>(string procedureName, object parameters = null)
         {
@@ -469,11 +477,6 @@ namespace EasyDapper
                 throw new ArgumentException("Procedure name is not valid", nameof(procedureName));
             }
         }
-        private void CleanupTransaction()
-        {
-            _transaction?.Dispose();
-            _transaction = null;
-        }
         private List<T> ValidateAndPrepareEntities<T>(IEnumerable<T> entities)
         {
             if (entities == null || !entities.Any())
@@ -624,18 +627,67 @@ namespace EasyDapper
 
             return parameters;
         }
+        //private async Task<DynamicParameters> CreateParametersAsync<T>(List<T> entities)
+        //{
+        //    var parameters = new DynamicParameters();
+        //    var properties = GetInsertProperties<T>().ToList();
+        //    for (int i = 0; i < entities.Count; i++)
+        //    {
+        //        foreach (var prop in properties)
+        //        {
+        //            parameters.Add($"p{i}_{prop.Name}", prop.GetValue(entities[i]));
+        //        }
+        //    }
+        //    return parameters;
+        //}
         private async Task<DynamicParameters> CreateParametersAsync<T>(List<T> entities)
         {
-            var parameters = new DynamicParameters();
-            var properties = GetInsertProperties<T>().ToList();
-            for (int i = 0; i < entities.Count; i++)
+            return await Task.Run(() =>
             {
-                foreach (var prop in properties)
+                var parameters = new DynamicParameters();
+                var properties = GetInsertProperties<T>().ToList();
+                for (int i = 0; i < entities.Count; i++)
                 {
-                    parameters.Add($"p{i}_{prop.Name}", prop.GetValue(entities[i]));
+                    foreach (var prop in properties)
+                    {
+                        parameters.Add($"p{i}_{prop.Name}", prop.GetValue(entities[i]));
+                    }
+                }
+                return parameters;
+            });
+        }
+        private void ExecuteCommand(string commandText)
+        {
+            using (var command = _transaction.Connection.CreateCommand())
+            {
+                command.Transaction = _transaction;
+                command.CommandText = commandText;
+                command.ExecuteNonQuery();
+            }
+        }
+        private void CleanupTransaction()
+        {
+            _transaction?.Dispose();
+            _transaction = null;
+            _savePoints.Clear();
+        }
+        public void Dispose()
+        {
+            if (_transaction != null)
+            {
+                try
+                {
+                    RollbackTransaction();
+                }
+                catch
+                {
+                    // خطاها در زمان Dispose چشم‌پوشی می‌شوند
                 }
             }
-            return parameters;
+            if (_lazyConnection?.IsValueCreated == true)
+            {
+                _lazyConnection.Value.Dispose();
+            }
         }
     }
 }

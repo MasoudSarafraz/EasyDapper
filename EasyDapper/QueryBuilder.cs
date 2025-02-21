@@ -14,7 +14,6 @@ using EasyDapper.Attributes;
 
 namespace EasyDapper
 {
-
     internal sealed class QueryBuilder<T> : IQueryBuilder<T>, IDisposable
     {
         private readonly List<string> _filters = new List<string>();
@@ -32,11 +31,21 @@ namespace EasyDapper
         private readonly List<string> _groupByColumns = new List<string>();
         private string _havingClause = string.Empty;
 
-
-
         internal QueryBuilder(string connectionString)
         {
+            if (string.IsNullOrEmpty(connectionString))
+            {
+                throw new ArgumentNullException("connectionString cannot be null or empty.");
+            }
             _lazyConnection = new Lazy<IDbConnection>(() => new SqlConnection(connectionString));
+        }
+        internal QueryBuilder(IDbConnection connection)
+        {
+            if (connection == null)
+            {
+                throw new ArgumentNullException(nameof(connection), "Connection cannot be null.");
+            }                
+            _lazyConnection = new Lazy<IDbConnection>(() => connection);
         }
         public IQueryBuilder<T> Where(Expression<Func<T, bool>> filter)
         {
@@ -45,7 +54,6 @@ namespace EasyDapper
             _filters.Add(expression);
             return this;
         }
-
         public IEnumerable<T> Execute()
         {
             var query = ((IQueryBuilder<T>)this).BuildQuery();
@@ -58,7 +66,6 @@ namespace EasyDapper
             var connection = GetOpenConnection();
             return connection.Query<TResult>(query, _parameters);
         }
-
         public async Task<IEnumerable<T>> ExecuteAsync()
         {
             var query = ((IQueryBuilder<T>)this).BuildQuery();
@@ -97,19 +104,16 @@ namespace EasyDapper
             _selectedColumns = string.Join(", ", selectedColumns);
             return this;
         }
-
         public IQueryBuilder<T> Count()
         {
             _isCountQuery = true;
             return this;
         }
-
         public IQueryBuilder<T> OrderBy(string orderByClause)
         {
             _orderByClause = "ORDER BY " + orderByClause;
             return this;
         }
-
         public IQueryBuilder<T> Paging(int pageSize, int pageNumber = 1)
         {
             if (pageSize <= 0)
@@ -124,13 +128,11 @@ namespace EasyDapper
             _offset = (pageNumber - 1) * pageSize; // محاسبه Offset بر اساس شماره صفحه
             return this;
         }
-
         public IQueryBuilder<T> InnerJoin<TJoin>(Expression<Func<T, TJoin, bool>> onCondition)
         {
             AddJoin("INNER JOIN", onCondition);
             return this;
         }
-
         public IQueryBuilder<T> LeftJoin<TJoin>(Expression<Func<T, TJoin, bool>> onCondition)
         {
             AddJoin("LEFT JOIN", onCondition);
@@ -151,13 +153,11 @@ namespace EasyDapper
             AddApply("CROSS APPLY", onCondition, subQueryBuilder);
             return this;
         }
-
         public IQueryBuilder<T> OuterApply<TSubQuery>(Expression<Func<T, TSubQuery, bool>> onCondition, Func<IQueryBuilder<TSubQuery>, IQueryBuilder<TSubQuery>> subQueryBuilder)
         {
             AddApply("OUTER APPLY", onCondition, subQueryBuilder);
             return this;
         }
-
         public IQueryBuilder<T> CustomJoin<TJoin>(string joinType, Expression<Func<T, TJoin, bool>> onCondition, params Expression<Func<TJoin, bool>>[] additionalConditions)
         {
             var parsedOnCondition = ParseExpression(onCondition.Body);
@@ -188,7 +188,6 @@ namespace EasyDapper
             _rowNumberClause = $"ROW_NUMBER() OVER (PARTITION BY {partitionByColumn} ORDER BY {orderByColumn}) AS RowNumber";
             return this;
         }
-
         private void AddJoin<TJoin>(string joinType, Expression<Func<T, TJoin, bool>> onCondition)
         {
             var parsedOnCondition = ParseExpression(onCondition.Body);
@@ -315,7 +314,6 @@ namespace EasyDapper
         {
             return _groupByColumns.Any() ? "GROUP BY " + string.Join(", ", _groupByColumns) : "";
         }
-
         private string BuildHavingClause()
         {
             return !string.IsNullOrEmpty(_havingClause) ? "HAVING " + _havingClause : "";
@@ -346,38 +344,32 @@ namespace EasyDapper
                     throw new NotSupportedException($"Expression type '{expression.NodeType}' is not supported.");
             }
         }
-
         private string HandleEqual(BinaryExpression expression)
         {
             if (IsNullConstant(expression.Right))
                 return ParseMember(expression.Left) + " IS NULL";
             return HandleBinary(expression, "=");
         }
-
         private string HandleNotEqual(BinaryExpression expression)
         {
             if (IsNullConstant(expression.Right))
                 return ParseMember(expression.Left) + " IS NOT NULL";
             return HandleBinary(expression, "<>");
         }
-
         private string HandleBinary(BinaryExpression expression, string op)
         {
             var left = ParseMember(expression.Left);
             var right = ParseValue(expression.Right);
             return left + " " + op + " " + right;
         }
-
         private string HandleAnd(BinaryExpression expression)
         {
             return "(" + ParseExpression(expression.Left) + " AND " + ParseExpression(expression.Right) + ")";
         }
-
         private string HandleOr(BinaryExpression expression)
         {
             return "(" + ParseExpression(expression.Left) + " OR " + ParseExpression(expression.Right) + ")";
         }
-
         private string HandleMethodCall(MethodCallExpression expression)
         {
             switch (expression.Method.Name)
@@ -396,20 +388,17 @@ namespace EasyDapper
                     throw new NotSupportedException($"Method '{expression.Method.Name}' is not supported.");
             }
         }
-
         private string HandleLike(MethodCallExpression expression, string format)
         {
             var property = ParseMember(expression.Object);
             var value = ParseValue(expression.Arguments[0], format);
             return property + " LIKE " + value;
         }
-
         private string HandleIsNullOrEmpty(MethodCallExpression expression)
         {
             var property = ParseMember(expression.Arguments[0]);
             return "(" + property + " IS NULL OR " + property + " = '')";
         }
-
         private string HandleBetween(MethodCallExpression expression)
         {
             var property = ParseMember(expression.Arguments[0]);
@@ -417,7 +406,6 @@ namespace EasyDapper
             var upper = ParseValue(expression.Arguments[2]);
             return property + " BETWEEN " + lower + " AND " + upper;
         }
-
         //private string ParseMember(Expression expression)
         //{
         //    if (expression is UnaryExpression unary)
@@ -443,7 +431,6 @@ namespace EasyDapper
             }
             throw new NotSupportedException($"Unsupported expression: {expression}");
         }
-
         private string ParseValue(Expression expression, string format = null)
         {
             var value = Expression.Lambda(expression).Compile().DynamicInvoke();
@@ -455,12 +442,10 @@ namespace EasyDapper
             _parameters[paramName] = value;
             return paramName;
         }
-
         private bool IsNullConstant(Expression expression)
         {
             return expression is ConstantExpression constant && constant.Value == null;
         }
-
         private string GetTableName(Type type)
         {
             var table = type.GetCustomAttribute<TableAttribute>();
@@ -470,18 +455,15 @@ namespace EasyDapper
                 ? "[" + Escape(schema) + "].[" + Escape(name) + "]"
                 : "[" + Escape(name) + "]";
         }
-
         private string GetColumnName(PropertyInfo property)
         {
             var column = property.GetCustomAttribute<ColumnAttribute>();
             return "[" + Escape(column?.ColumnName ?? property.Name) + "]";
         }
-
         private static string Escape(string identifier)
         {
             return identifier?.Replace("]", "]]") ?? string.Empty;
         }
-
         private IDbConnection GetOpenConnection()
         {
             var connection = _lazyConnection.Value;
@@ -509,7 +491,6 @@ namespace EasyDapper
             var tableName = GetTableName(typeof(T));
             return " FROM " + tableName;
         }
-
         private string BuildJoinClauses()
         {
             var sb = new StringBuilder();
@@ -526,7 +507,6 @@ namespace EasyDapper
             }
             return sb.ToString();
         }
-
         private string BuildApplyClauses()
         {
             var sb = new StringBuilder();
@@ -539,17 +519,14 @@ namespace EasyDapper
             }
             return sb.ToString();
         }
-
         private string BuildWhereClause()
         {
             return _filters.Any() ? "WHERE " + string.Join(" AND ", _filters) : "";
         }
-
         private string BuildOrderByClause()
         {
             return !string.IsNullOrEmpty(_orderByClause) ? "ORDER BY " + _orderByClause : "";
         }
-
         private string BuildPaginationClause()
         {
             if (_limit.HasValue)
@@ -558,8 +535,6 @@ namespace EasyDapper
             }
             return "";
         }
-
-
         public void Dispose()
         {
             if (_lazyConnection?.IsValueCreated == true)
@@ -575,7 +550,6 @@ namespace EasyDapper
             public string Alias { get; set; }
             public string OnCondition { get; set; }
         }
-
         // کلاس برای ذخیره اطلاعات APPLY
         private class ApplyInfo
         {

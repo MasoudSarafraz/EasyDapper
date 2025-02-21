@@ -30,6 +30,7 @@ namespace EasyDapper
         void BeginTransaction();
         void CommitTransaction();
         void RollbackTransaction();
+        int TransactionCount();
         IEnumerable<T> ExecuteStoredProcedure<T>(string procedureName, object parameters = null);
         Task<IEnumerable<T>> ExecuteStoredProcedureAsync<T>(string procedureName, object parameters = null, CancellationToken cancellationToken = default);
         T ExecuteMultiResultStoredProcedure<T>(string procedureName, Func<SqlMapper.GridReader, T> mapper, object parameters = null, IDbTransaction transaction = null, int? commandTimeout = null);

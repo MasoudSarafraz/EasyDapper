@@ -2,7 +2,7 @@
 
 namespace EasyDapper.Attributes
 {
-    [AttributeUsage(AttributeTargets.Property, Inherited = false, AllowMultiple = false)]
+    [AttributeUsage(AttributeTargets.Property, Inherited = false)]
     public class ColumnAttribute : Attribute
     {
         public string ColumnName { get; }
