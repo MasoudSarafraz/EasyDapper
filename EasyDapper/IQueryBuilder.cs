@@ -1,17 +1,18 @@
-﻿using EasyDapper.Implementations;
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Linq.Expressions;
 using System.Threading;
 using System.Threading.Tasks;
 
-namespace EasyDapper.Interfaces
+namespace EasyDapper
 {
     public interface IQueryBuilder<T>
     {
         IQueryBuilder<T> Where(Expression<Func<T, bool>> filter);
         IEnumerable<T> Execute();
+        IEnumerable<TResult> Execute<TResult>();
         Task<IEnumerable<T>> ExecuteAsync();
+        Task<IEnumerable<TResult>> ExecuteAsync<TResult>();
         IQueryBuilder<T> Select(params Expression<Func<T, object>>[] columns);
         IQueryBuilder<T> Count();
         IQueryBuilder<T> OrderBy(string orderByClause);
@@ -23,6 +24,13 @@ namespace EasyDapper.Interfaces
         IQueryBuilder<T> CrossApply<TSubQuery>(Expression<Func<T, TSubQuery, bool>> onCondition, Func<IQueryBuilder<TSubQuery>, IQueryBuilder<TSubQuery>> subQueryBuilder);
         IQueryBuilder<T> OuterApply<TSubQuery>(Expression<Func<T, TSubQuery, bool>> onCondition, Func<IQueryBuilder<TSubQuery>, IQueryBuilder<TSubQuery>> subQueryBuilder);
         IQueryBuilder<T> Row_Number(Expression<Func<T, object>> partitionBy, Expression<Func<T, object>> orderBy);
+        IQueryBuilder<T> Sum(Expression<Func<T, object>> column, string alias = null);
+        IQueryBuilder<T> Avg(Expression<Func<T, object>> column, string alias = null);
+        IQueryBuilder<T> Min(Expression<Func<T, object>> column, string alias = null);
+        IQueryBuilder<T> Max(Expression<Func<T, object>> column, string alias = null);
+        IQueryBuilder<T> Count(Expression<Func<T, object>> column, string alias = null);
+        IQueryBuilder<T> GroupBy(params Expression<Func<T, object>>[] groupByColumns);
+        IQueryBuilder<T> Having(Expression<Func<T, bool>> havingCondition);
         // Explicit Method for BuildQuery
         // به دلیل اینکه کلاس اینترنال هستش متد های outerapply و crossapply به مشکل میخوردند . بنابراین
         string BuildQuery();

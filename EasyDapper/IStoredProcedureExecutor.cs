@@ -1,8 +1,6 @@
-﻿using System.Collections.Generic;
-using System.Threading;
-using System.Threading.Tasks;
+﻿
 
-namespace EasyDapper.Interfaces
+namespace EasyDapper
 {
     //public interface IStoredProcedureExecutor<T>
     //{

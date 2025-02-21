@@ -5,9 +5,7 @@ using System.Linq;
 using System.Reflection;
 using System.Threading.Tasks;
 using Dapper;
-using EasyDapper.Interfaces;
 using EasyDapper.Attributes;
-using EasyDapper.Factories;
 using System.Collections.Generic;
 using System.Collections.Concurrent;
 using System.Data.SqlTypes;
@@ -17,7 +15,7 @@ using System.Text.RegularExpressions;
 using System.Xml.Linq;
 
 
-namespace EasyDapper.Implementations
+namespace EasyDapper
 {
     internal sealed class DapperService : IDapperService, IDisposable
     {

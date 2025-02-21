@@ -1,5 +1,4 @@
-﻿using EasyDapper.Interfaces;
-using ProfessionalDapperLibrary.Implementations;
+﻿using ProfessionalDapperLibrary.Implementations;
 
 namespace EasyDapper.Factories
 {

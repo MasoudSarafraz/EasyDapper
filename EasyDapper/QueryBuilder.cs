@@ -11,9 +11,8 @@ using System.Threading;
 using System.Threading.Tasks;
 using Dapper;
 using EasyDapper.Attributes;
-using EasyDapper.Interfaces;
 
-namespace EasyDapper.Implementations
+namespace EasyDapper
 {
 
     internal sealed class QueryBuilder<T> : IQueryBuilder<T>, IDisposable
@@ -29,6 +28,12 @@ namespace EasyDapper.Implementations
         private readonly List<JoinInfo> _joins = new List<JoinInfo>();
         private readonly List<ApplyInfo> _applies = new List<ApplyInfo>();
         private string _rowNumberClause = string.Empty;
+        private readonly List<string> _aggregateColumns = new List<string>();
+        private readonly List<string> _groupByColumns = new List<string>();
+        private string _havingClause = string.Empty;
+
+
+
         internal QueryBuilder(string connectionString)
         {
             _lazyConnection = new Lazy<IDbConnection>(() => new SqlConnection(connectionString));
@@ -47,6 +52,12 @@ namespace EasyDapper.Implementations
             var connection = GetOpenConnection();
             return connection.Query<T>(query, _parameters);
         }
+        public IEnumerable<TResult> Execute<TResult>()
+        {
+            var query = ((IQueryBuilder<T>)this).BuildQuery();
+            var connection = GetOpenConnection();
+            return connection.Query<TResult>(query, _parameters);
+        }
 
         public async Task<IEnumerable<T>> ExecuteAsync()
         {
@@ -54,17 +65,34 @@ namespace EasyDapper.Implementations
             var connection = GetOpenConnection();
             return await connection.QueryAsync<T>(query, _parameters);
         }
+        public async Task<IEnumerable<TResult>> ExecuteAsync<TResult>()
+        {
+            var query = ((IQueryBuilder<T>)this).BuildQuery();
+            var connection = GetOpenConnection();
+            return await connection.QueryAsync<TResult>(query, _parameters);
+        }
+        //public IQueryBuilder<T> Select(params Expression<Func<T, object>>[] columns)
+        //{
+        //    var selectedColumns = new List<string>();
+        //    foreach (var column in columns)
+        //    {
+        //        var memberExpression = column.Body as MemberExpression;
+        //        if (memberExpression == null)
+        //        {
+        //            throw new ArgumentException("Each column must be a member expression.");
+        //        }
+        //        selectedColumns.Add(ParseMember(memberExpression));
+        //    }
+        //    _selectedColumns = string.Join(", ", selectedColumns);
+        //    return this;
+        //}
         public IQueryBuilder<T> Select(params Expression<Func<T, object>>[] columns)
         {
             var selectedColumns = new List<string>();
             foreach (var column in columns)
             {
-                var memberExpression = column.Body as MemberExpression;
-                if (memberExpression == null)
-                {
-                    throw new ArgumentException("Each column must be a member expression.");
-                }
-                selectedColumns.Add(ParseMember(memberExpression));
+                string columnName = ParseMember(column.Body);
+                selectedColumns.Add(columnName);
             }
             _selectedColumns = string.Join(", ", selectedColumns);
             return this;
@@ -190,7 +218,75 @@ namespace EasyDapper.Implementations
                 SubQuery = $"({subQuery}) AS {alias} ON {parsedOnCondition}"
             });
         }
-
+        public IQueryBuilder<T> Sum(Expression<Func<T, object>> column, string alias = null)
+        {
+            var parsedColumn = ParseMember(column.Body);
+            var aggregateColumn = $"SUM({parsedColumn})";
+            if (!string.IsNullOrEmpty(alias))
+            {
+                aggregateColumn += $" AS {alias}";
+            }
+            _aggregateColumns.Add(aggregateColumn);
+            return this;
+        }
+        public IQueryBuilder<T> Avg(Expression<Func<T, object>> column, string alias = null)
+        {
+            var parsedColumn = ParseMember(column.Body);
+            var aggregateColumn = $"AVG({parsedColumn})";
+            if (!string.IsNullOrEmpty(alias))
+            {
+                aggregateColumn += $" AS {alias}";
+            }
+            _aggregateColumns.Add(aggregateColumn);
+            return this;
+        }
+        public IQueryBuilder<T> Min(Expression<Func<T, object>> column, string alias = null)
+        {
+            var parsedColumn = ParseMember(column.Body);
+            var aggregateColumn = $"MIN({parsedColumn})";
+            if (!string.IsNullOrEmpty(alias))
+            {
+                aggregateColumn += $" AS {alias}";
+            }
+            _aggregateColumns.Add(aggregateColumn);
+            return this;
+        }
+        public IQueryBuilder<T> Max(Expression<Func<T, object>> column, string alias = null)
+        {
+            var parsedColumn = ParseMember(column.Body);
+            var aggregateColumn = $"MAX({parsedColumn})";
+            if (!string.IsNullOrEmpty(alias))
+            {
+                aggregateColumn += $" AS {alias}";
+            }
+            _aggregateColumns.Add(aggregateColumn);
+            return this;
+        }
+        public IQueryBuilder<T> Count(Expression<Func<T, object>> column, string alias = null)
+        {
+            var parsedColumn = ParseMember(column.Body);
+            var aggregateColumn = $"COUNT({parsedColumn})";
+            if (!string.IsNullOrEmpty(alias))
+            {
+                aggregateColumn += $" AS {alias}";
+            }
+            _aggregateColumns.Add(aggregateColumn);
+            return this;
+        }
+        public IQueryBuilder<T> GroupBy(params Expression<Func<T, object>>[] groupByColumns)
+        {
+            foreach (var column in groupByColumns)
+            {
+                var parsedColumn = ParseMember(column.Body);
+                _groupByColumns.Add(parsedColumn);
+            }
+            return this;
+        }
+        public IQueryBuilder<T> Having(Expression<Func<T, bool>> havingCondition)
+        {
+            _havingClause = ParseExpression(havingCondition.Body);
+            return this;
+        }
         string IQueryBuilder<T>.BuildQuery()
         {
             var selectClause = BuildSelectClause();
@@ -200,18 +296,30 @@ namespace EasyDapper.Implementations
             var whereClause = BuildWhereClause();
             var orderByClause = BuildOrderByClause();
             var paginationClause = BuildPaginationClause();
+            var groupByClause = BuildGroupByClause();
+            var havingClause = BuildHavingClause();
             var sb = new StringBuilder();
             sb.Append(selectClause)
               .Append(fromClause)
               .Append(joinClauses)
               .Append(applyClauses);
             if (!string.IsNullOrEmpty(whereClause)) sb.Append(" ").Append(whereClause);
+            if (!string.IsNullOrEmpty(groupByClause)) sb.Append(" ").Append(groupByClause);
+            if (!string.IsNullOrEmpty(havingClause)) sb.Append(" ").Append(havingClause);
             if (!string.IsNullOrEmpty(orderByClause)) sb.Append(" ").Append(orderByClause);
             if (!string.IsNullOrEmpty(paginationClause)) sb.Append(" ").Append(paginationClause);
 
             return sb.ToString();
         }
+        private string BuildGroupByClause()
+        {
+            return _groupByColumns.Any() ? "GROUP BY " + string.Join(", ", _groupByColumns) : "";
+        }
 
+        private string BuildHavingClause()
+        {
+            return !string.IsNullOrEmpty(_havingClause) ? "HAVING " + _havingClause : "";
+        }
         private string ParseExpression(Expression expression)
         {
             switch (expression.NodeType)
@@ -390,9 +498,12 @@ namespace EasyDapper.Implementations
             {
                 columns = _rowNumberClause + ", " + columns;
             }
+            if (_aggregateColumns.Any())
+            {
+                columns = string.Join(", ", _aggregateColumns) + (string.IsNullOrEmpty(columns) ? "" : ", " + columns);
+            }
             return "SELECT " + columns;
         }
-
         private string BuildFromClause()
         {
             var tableName = GetTableName(typeof(T));

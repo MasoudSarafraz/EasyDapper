@@ -1,8 +1,6 @@
 ﻿using System.Data;
-using EasyDapper.Implementations;
-using EasyDapper.Interfaces;
 
-namespace EasyDapper.Factories
+namespace EasyDapper
 {
     public static class DapperServiceFactory
     {
