@@ -23,7 +23,7 @@ namespace EasyDapper
         private int? _limit = null;
         private int? _offset = null;
         private bool _isCountQuery = false;
-        private string _selectedColumns = "*";
+        private string _selectedColumns = string.Empty;
         private readonly List<JoinInfo> _joins = new List<JoinInfo>();
         private readonly List<ApplyInfo> _applies = new List<ApplyInfo>();
         private string _rowNumberClause = string.Empty;
@@ -102,7 +102,21 @@ namespace EasyDapper
                 string columnName = ParseMember(column.Body);
                 selectedColumns.Add(columnName);
             }
-            _selectedColumns = string.Join(", ", selectedColumns);
+            _selectedColumns += string.Join(", ", selectedColumns);
+            return this;
+        }
+        public IQueryBuilder<T> Select<TSource>(Expression<Func<TSource, object>>[] columns)
+        {
+            string currentColumns = _selectedColumns;
+            foreach (var column in columns)
+            {
+                string columnName = ParseMember(column.Body);
+                if (string.IsNullOrEmpty(currentColumns))
+                    currentColumns = columnName;
+                else
+                    currentColumns += ", " + columnName;
+            }
+            _selectedColumns = currentColumns;
             return this;
         }
         public IQueryBuilder<T> Count()
@@ -129,22 +143,22 @@ namespace EasyDapper
             _offset = (pageNumber - 1) * pageSize; // محاسبه Offset بر اساس شماره صفحه
             return this;
         }
-        public IQueryBuilder<T> InnerJoin<TJoin>(Expression<Func<T, TJoin, bool>> onCondition)
+        public IQueryBuilder<T> InnerJoin<TLeft, TRight>(Expression<Func<TLeft, TRight, bool>> onCondition)
         {
             AddJoin("INNER JOIN", onCondition);
             return this;
         }
-        public IQueryBuilder<T> LeftJoin<TJoin>(Expression<Func<T, TJoin, bool>> onCondition)
+        public IQueryBuilder<T> LeftJoin<TLeft, TRight>(Expression<Func<TLeft, TRight, bool>> onCondition)
         {
             AddJoin("LEFT JOIN", onCondition);
             return this;
         }
-        public IQueryBuilder<T> RightJoin<TJoin>(Expression<Func<T, TJoin, bool>> onCondition)
+        public IQueryBuilder<T> RightJoin<TLeft, TRight>(Expression<Func<TLeft, TRight, bool>> onCondition)
         {
             AddJoin("RIGHT JOIN", onCondition);
             return this;
         }
-        public IQueryBuilder<T> FullJoin<TJoin>(Expression<Func<T, TJoin, bool>> onCondition)
+        public IQueryBuilder<T> FullJoin<TLeft, TRight>(Expression<Func<TLeft, TRight, bool>> onCondition)
         {
             AddJoin("FULL JOIN", onCondition);
             return this;
@@ -189,18 +203,18 @@ namespace EasyDapper
             _rowNumberClause = $"ROW_NUMBER() OVER (PARTITION BY {partitionByColumn} ORDER BY {orderByColumn}) AS RowNumber";
             return this;
         }
-        private void AddJoin<TJoin>(string joinType, Expression<Func<T, TJoin, bool>> onCondition)
+        private void AddJoin<TLeft, TRight>(string joinType, Expression<Func<TLeft, TRight, bool>> onCondition)
         {
+            var leftTableName = GetTableName(typeof(TLeft));
+            var rightTableName = GetTableName(typeof(TRight));
+
             var parsedOnCondition = ParseExpression(onCondition.Body);
-            var tableName = GetTableName(typeof(TJoin));
-            var alias = "t" + (_joins.Count + 1);
-            parsedOnCondition = parsedOnCondition.Replace("[", $"{alias}.");
+            var tableName = GetTableName(typeof(TRight));
 
             _joins.Add(new JoinInfo
             {
                 JoinType = joinType,
                 TableName = tableName,
-                Alias = alias,
                 OnCondition = parsedOnCondition
             });
         }
@@ -428,20 +442,62 @@ namespace EasyDapper
             }
             if (expression is MemberExpression member)
             {
-                return "[" + member.Member.Name + "]";
+                var tableName = GetTableName(member.Expression.Type);
+                return $"{tableName}.[{member.Member.Name}]";
             }
             throw new NotSupportedException($"Unsupported expression: {expression}");
         }
         private string ParseValue(Expression expression, string format = null)
         {
-            var value = Expression.Lambda(expression).Compile().DynamicInvoke();
-            var paramName = "@p" + _parameters.Count;
-            if (format != null && value is string str)
+            if (expression is ConstantExpression constant)
             {
-                value = string.Format(format, str);
+                // اگر عبارت یک مقدار ثابت باشد
+                var paramName = "@p" + _parameters.Count;
+                var value = constant.Value;
+                if (format != null && value is string str)
+                {
+                    value = string.Format(format, str);
+                }
+                _parameters[paramName] = value;
+                return paramName;
             }
-            _parameters[paramName] = value;
-            return paramName;
+            else if (expression is MemberExpression member)
+            {
+                var tableAlias = GetTableName(member.Expression.Type);
+                return $"{tableAlias}.[{member.Member.Name}]";
+            }
+            else if (expression is BinaryExpression binary)
+            {
+                var left = ParseValue(binary.Left);
+                var right = ParseValue(binary.Right);
+                return $"{left} {GetOperator(binary.NodeType)} {right}";
+            }
+            else if (expression is UnaryExpression unary)
+            {
+                return ParseValue(unary.Operand);
+            }
+
+            throw new NotSupportedException($"Unsupported expression: {expression}");
+        }
+        private string GetOperator(ExpressionType nodeType)
+        {
+            switch (nodeType)
+            {
+                case ExpressionType.Equal:
+                    return "=";
+                case ExpressionType.NotEqual:
+                    return "<>";
+                case ExpressionType.GreaterThan:
+                    return ">";
+                case ExpressionType.LessThan:
+                    return "<";
+                case ExpressionType.GreaterThanOrEqual:
+                    return ">=";
+                case ExpressionType.LessThanOrEqual:
+                    return "<=";
+                default:
+                    throw new NotSupportedException($"Unsupported operator: {nodeType}");
+            }
         }
         private bool IsNullConstant(Expression expression)
         {
@@ -477,7 +533,10 @@ namespace EasyDapper
         }
         private string BuildSelectClause()
         {
-            var columns = _isCountQuery ? "COUNT(*) AS TotalCount" : _selectedColumns;
+            var columns = _isCountQuery ? "COUNT(*) AS TotalCount"
+                : string.IsNullOrEmpty(_selectedColumns)
+                ? string.Join(", ", typeof(T).GetProperties().Select(p => $"{GetTableName(typeof(T))}.{GetColumnName(p)} AS {p.Name}"))
+                : _selectedColumns;
             if (!string.IsNullOrEmpty(_rowNumberClause))
             {
                 columns = _rowNumberClause + ", " + columns;
@@ -491,7 +550,7 @@ namespace EasyDapper
         private string BuildFromClause()
         {
             var tableName = GetTableName(typeof(T));
-            return " FROM " + tableName;
+            return $" FROM {tableName} AS {tableName}";
         }
         private string BuildJoinClauses()
         {
@@ -501,9 +560,7 @@ namespace EasyDapper
                 sb.Append(" ")
                   .Append(join.JoinType)
                   .Append(" ")
-                  .Append(join.TableName)
-                  .Append(" AS ")
-                  .Append(join.Alias)
+                  .Append($"{join.TableName} AS {join.TableName}")
                   .Append(" ON ")
                   .Append(join.OnCondition);
             }

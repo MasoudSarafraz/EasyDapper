@@ -14,13 +14,14 @@ namespace EasyDapper
         Task<IEnumerable<T>> ExecuteAsync();
         Task<IEnumerable<TResult>> ExecuteAsync<TResult>();
         IQueryBuilder<T> Select(params Expression<Func<T, object>>[] columns);
+        IQueryBuilder<T> Select<TSource>(params Expression<Func<TSource, object>>[] columns);
         IQueryBuilder<T> Count();
         IQueryBuilder<T> OrderBy(string orderByClause);
         IQueryBuilder<T> Paging(int pageSize, int pageNumber = 1);
-        IQueryBuilder<T> InnerJoin<TJoin>(Expression<Func<T, TJoin, bool>> onCondition);
-        IQueryBuilder<T> LeftJoin<TJoin>(Expression<Func<T, TJoin, bool>> onCondition);
-        IQueryBuilder<T> RightJoin<TJoin>(Expression<Func<T, TJoin, bool>> onCondition);
-        IQueryBuilder<T> FullJoin<TJoin>(Expression<Func<T, TJoin, bool>> onCondition);
+        IQueryBuilder<T> InnerJoin<TLeft, TRight>(Expression<Func<TLeft, TRight, bool>> onCondition);
+        IQueryBuilder<T> LeftJoin<TLeft, TRight>(Expression<Func<TLeft, TRight, bool>> onCondition);
+        IQueryBuilder<T> RightJoin<TLeft, TRight>(Expression<Func<TLeft, TRight, bool>> onCondition);
+        IQueryBuilder<T> FullJoin<TLeft, TRight>(Expression<Func<TLeft, TRight, bool>> onCondition);
         IQueryBuilder<T> CrossApply<TSubQuery>(Expression<Func<T, TSubQuery, bool>> onCondition, Func<IQueryBuilder<TSubQuery>, IQueryBuilder<TSubQuery>> subQueryBuilder);
         IQueryBuilder<T> OuterApply<TSubQuery>(Expression<Func<T, TSubQuery, bool>> onCondition, Func<IQueryBuilder<TSubQuery>, IQueryBuilder<TSubQuery>> subQueryBuilder);
         IQueryBuilder<T> Row_Number(Expression<Func<T, object>> partitionBy, Expression<Func<T, object>> orderBy);
