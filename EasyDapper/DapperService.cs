@@ -30,14 +30,17 @@ namespace EasyDapper
         private static readonly ConcurrentDictionary<Type, string> GetByIdQueryCache = new ConcurrentDictionary<Type, string>();
         private static readonly ConcurrentDictionary<Type, string> BulkInsertQueryCache = new ConcurrentDictionary<Type, string>();
         private int BATCH_SIZE = 100;
+        private int _timeOut;
         public int TransactionCount() => _transactionCount;
         public DapperService(string connectionString)
         {
             _lazyConnection = new Lazy<IDbConnection>(() => new SqlConnection(connectionString));
+            _timeOut = _lazyConnection.Value.ConnectionTimeout;
         }
         public DapperService(IDbConnection externalConnection)
         {
             _externalConnection = externalConnection ?? throw new ArgumentNullException(nameof(externalConnection));
+            _timeOut = _lazyConnection.Value.ConnectionTimeout;
         }
         public void BeginTransaction()
         {
@@ -59,11 +62,11 @@ namespace EasyDapper
             if (_transaction == null)
             {
                 throw new InvalidOperationException("No transaction is in progress.");
-            }                
+            }
             if (_transactionCount <= 0)
             {
                 throw new InvalidOperationException("No active transactions to commit.");
-            }                
+            }
             _transactionCount--;
             if (_transactionCount == 0)
             {
@@ -80,7 +83,7 @@ namespace EasyDapper
             if (_transaction == null)
             {
                 throw new InvalidOperationException("No transaction is in progress.");
-            }                
+            }
             try
             {
                 if (_transactionCount > 0)
@@ -104,7 +107,7 @@ namespace EasyDapper
                     CleanupTransaction();
                 }
             }
-        }        
+        }
         //public int Insert<T>(T entity) where T : class
         //{
         //    var connection = GetOpenConnection();
@@ -126,7 +129,7 @@ namespace EasyDapper
 
             if (identityProp != null)
             {
-                var newId = connection.ExecuteScalar<int>(query, entity, _transaction);
+                var newId = connection.ExecuteScalar<int>(query, entity, _transaction, _timeOut);
                 identityProp.SetValue(entity, newId);
                 return 1;
             }
@@ -140,7 +143,7 @@ namespace EasyDapper
 
             if (identityProp != null)
             {
-                var newId = await connection.ExecuteScalarAsync<int>(query, entity, _transaction);
+                var newId = await connection.ExecuteScalarAsync<int>(query, entity, _transaction, _timeOut);
                 identityProp.SetValue(entity, newId);
                 return 1;
             }
@@ -161,7 +164,7 @@ namespace EasyDapper
                 {
                     var query = BuildOptimizedBatchInsertQuery<T>(batch.Count);
                     var parameters = CreateOptimizedParameters(batch);
-                    var generatedIds = connection.Query<int>(query, parameters, _transaction).ToList();
+                    var generatedIds = connection.Query<int>(query, parameters, _transaction, commandTimeout: _timeOut).ToList();
                     Parallel.For(0, batch.Count, j =>
                     {
                         identityProp.SetValue(batch[j], generatedIds[j]);
@@ -170,7 +173,7 @@ namespace EasyDapper
                 else
                 {
                     var simpleQuery = BulkInsertQueryCache.GetOrAdd(typeof(T), BuildSimpleInsertQuery<T>);
-                    totalInserted += connection.Execute(simpleQuery, batch, _transaction);
+                    totalInserted += connection.Execute(simpleQuery, batch, _transaction, _timeOut);
                 }
             }
             return entityList.Count;
@@ -190,7 +193,7 @@ namespace EasyDapper
                 {
                     var query = BuildOptimizedBatchInsertQuery<T>(batch.Count);
                     var parameters = await CreateParametersAsync(batch);
-                    var generatedIds = (await connection.QueryAsync<int>(query, parameters, _transaction)).ToList();
+                    var generatedIds = (await connection.QueryAsync<int>(query, parameters, _transaction, _timeOut)).ToList();
                     for (int j = 0; j < batch.Count; j++)
                     {
                         identityProp.SetValue(entityList[j], generatedIds[j]);
@@ -199,7 +202,7 @@ namespace EasyDapper
                 else
                 {
                     var simpleQuery = BulkInsertQueryCache.GetOrAdd(typeof(T), BuildSimpleInsertQuery<T>);
-                    totalInserted += connection.Execute(simpleQuery, batch, _transaction);
+                    totalInserted += connection.Execute(simpleQuery, batch, _transaction, _timeOut);
                 }
             }
             return entityList.Count;
@@ -208,65 +211,65 @@ namespace EasyDapper
         {
             var connection = GetOpenConnection();
             var query = UpdateQueryCache.GetOrAdd(typeof(T), BuildUpdateQuery<T>);
-            return connection.Execute(query, entity, _transaction);
+            return connection.Execute(query, entity, _transaction, _timeOut);
         }
         public async Task<int> UpdateAsync<T>(T entity) where T : class
         {
             var connection = await GetOpenConnectionAsync();
             var query = UpdateQueryCache.GetOrAdd(typeof(T), BuildUpdateQuery<T>);
-            return await connection.ExecuteAsync(query, entity, _transaction);
+            return await connection.ExecuteAsync(query, entity, _transaction, _timeOut);
         }
         public int UpdateList<T>(IEnumerable<T> entities) where T : class
         {
             var connection = GetOpenConnection();
             var query = UpdateQueryCache.GetOrAdd(typeof(T), BuildUpdateQuery<T>);
-            return connection.Execute(query, entities, _transaction);
+            return connection.Execute(query, entities, _transaction, _timeOut);
         }
         public async Task<int> UpdateListAsync<T>(IEnumerable<T> entities) where T : class
         {
             var connection = await GetOpenConnectionAsync();
             var query = UpdateQueryCache.GetOrAdd(typeof(T), BuildUpdateQuery<T>);
-            return await connection.ExecuteAsync(query, entities, _transaction);
+            return await connection.ExecuteAsync(query, entities, _transaction, _timeOut);
         }
         public int Delete<T>(T entity) where T : class
         {
             var connection = GetOpenConnection();
             var query = DeleteQueryCache.GetOrAdd(typeof(T), BuildDeleteQuery<T>);
             var parameters = CreatePrimaryKeyParameters(entity);
-            return connection.Execute(query, parameters, _transaction);
+            return connection.Execute(query, parameters, _transaction, _timeOut);
         }
         public async Task<int> DeleteAsync<T>(T entity) where T : class
         {
             var connection = await GetOpenConnectionAsync();
             var query = DeleteQueryCache.GetOrAdd(typeof(T), BuildDeleteQuery<T>);
             var parameters = CreatePrimaryKeyParameters(entity);
-            return await connection.ExecuteAsync(query, parameters, _transaction);
+            return await connection.ExecuteAsync(query, parameters, _transaction, _timeOut);
         }
         public int DeleteList<T>(IEnumerable<T> entities) where T : class
         {
             var connection = GetOpenConnection();
             var query = DeleteQueryCache.GetOrAdd(typeof(T), BuildDeleteQuery<T>);
             var parameters = entities.Select(CreatePrimaryKeyParameters);
-            return connection.Execute(query, parameters, _transaction);
+            return connection.Execute(query, parameters, _transaction, _timeOut);
         }
         public async Task<int> DeleteListAsync<T>(IEnumerable<T> entities) where T : class
         {
             var connection = await GetOpenConnectionAsync();
             var query = DeleteQueryCache.GetOrAdd(typeof(T), BuildDeleteQuery<T>);
             var parameters = entities.Select(CreatePrimaryKeyParameters);
-            return await connection.ExecuteAsync(query, parameters, _transaction);
+            return await connection.ExecuteAsync(query, parameters, _transaction, _timeOut);
         }
         public T GetById<T>(object id) where T : class
         {
             var connection = GetOpenConnection();
             var query = GetByIdQueryCache.GetOrAdd(typeof(T), BuildGetByIdQuery<T>);
-            return connection.QueryFirstOrDefault<T>(query, new { Id = id }, _transaction);
+            return connection.QueryFirstOrDefault<T>(query, new { Id = id }, _transaction, _timeOut);
         }
         public async Task<T> GetByIdAsync<T>(object id) where T : class
         {
             var connection = await GetOpenConnectionAsync();
             var query = GetByIdQueryCache.GetOrAdd(typeof(T), BuildGetByIdQuery<T>);
-            return await connection.QueryFirstOrDefaultAsync<T>(query, new { Id = id }, _transaction);
+            return await connection.QueryFirstOrDefaultAsync<T>(query, new { Id = id }, _transaction, _timeOut);
         }
         public T GetById<T>(T entity) where T : class
         {
@@ -279,7 +282,7 @@ namespace EasyDapper
                 return $"SELECT {columns} FROM {tableName} WHERE {whereClause}";
             });
             var parameters = GetPrimaryKeyValues(entity);
-            return connection.QueryFirstOrDefault<T>(query, parameters, _transaction);
+            return connection.QueryFirstOrDefault<T>(query, parameters, _transaction, _timeOut);
         }
         public async Task<T> GetByIdAsync<T>(T entity) where T : class
         {
@@ -296,7 +299,7 @@ namespace EasyDapper
 
             var parameters = GetPrimaryKeyProperties<T>().ToDictionary(p => p.Name, p => p.GetValue(entity));
 
-            return await connection.QueryFirstOrDefaultAsync<T>(query, parameters, _transaction);
+            return await connection.QueryFirstOrDefaultAsync<T>(query, parameters, _transaction, _timeOut);
         }
         public IQueryBuilder<T> QueryBuilder<T>()
         {
@@ -314,6 +317,8 @@ namespace EasyDapper
             return openConnection.Query<T>(
             procedureName,
             param: parameters,
+            transaction: _transaction,
+            commandTimeout: _timeOut,
             commandType: CommandType.StoredProcedure
             );
         }
@@ -326,6 +331,8 @@ namespace EasyDapper
             new CommandDefinition(
                 procedureName,
                 parameters,
+                transaction: _transaction,
+                commandTimeout: _timeOut,
                 commandType: CommandType.StoredProcedure,
                 cancellationToken: cancellationToken
             )
@@ -339,7 +346,7 @@ namespace EasyDapper
                 procedureName,
                 parameters,
                 transaction,
-                commandTimeout ?? openConnection.ConnectionTimeout,
+                commandTimeout ?? _timeOut,
                 CommandType.StoredProcedure))
             {
                 return mapper(multi);
@@ -354,7 +361,7 @@ namespace EasyDapper
                     procedureName,
                     parameters,
                     transaction,
-                    commandTimeout ?? openConnection.ConnectionTimeout,
+                    commandTimeout ?? _timeOut,
                     CommandType.StoredProcedure,
                     cancellationToken: cancellationToken
                 )

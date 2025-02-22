@@ -30,7 +30,7 @@ namespace EasyDapper
         private readonly List<string> _aggregateColumns = new List<string>();
         private readonly List<string> _groupByColumns = new List<string>();
         private string _havingClause = string.Empty;
-
+        private int _timeOut;
         //internal QueryBuilder(string connectionString)
         //{
         //    if (string.IsNullOrEmpty(connectionString))
@@ -44,8 +44,9 @@ namespace EasyDapper
             if (connection == null)
             {
                 throw new ArgumentNullException(nameof(connection), "Connection cannot be null.");
-            }                
+            }
             _lazyConnection = new Lazy<IDbConnection>(() => connection);
+            _timeOut = _lazyConnection.Value.ConnectionTimeout;
         }
         public IQueryBuilder<T> Where(Expression<Func<T, bool>> filter)
         {
@@ -58,25 +59,25 @@ namespace EasyDapper
         {
             var query = ((IQueryBuilder<T>)this).BuildQuery();
             var connection = GetOpenConnection();
-            return connection.Query<T>(query, _parameters);
+            return connection.Query<T>(query, _parameters, commandTimeout: _timeOut);
         }
         public IEnumerable<TResult> Execute<TResult>()
         {
             var query = ((IQueryBuilder<T>)this).BuildQuery();
             var connection = GetOpenConnection();
-            return connection.Query<TResult>(query, _parameters);
+            return connection.Query<TResult>(query, _parameters, commandTimeout: _timeOut);
         }
         public async Task<IEnumerable<T>> ExecuteAsync()
         {
             var query = ((IQueryBuilder<T>)this).BuildQuery();
             var connection = GetOpenConnection();
-            return await connection.QueryAsync<T>(query, _parameters);
+            return await connection.QueryAsync<T>(query, _parameters, commandTimeout: _timeOut);
         }
         public async Task<IEnumerable<TResult>> ExecuteAsync<TResult>()
         {
             var query = ((IQueryBuilder<T>)this).BuildQuery();
             var connection = GetOpenConnection();
-            return await connection.QueryAsync<TResult>(query, _parameters);
+            return await connection.QueryAsync<TResult>(query, _parameters, commandTimeout: _timeOut);
         }
         //public IQueryBuilder<T> Select(params Expression<Func<T, object>>[] columns)
         //{
