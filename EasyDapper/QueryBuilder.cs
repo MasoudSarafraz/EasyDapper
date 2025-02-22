@@ -550,7 +550,8 @@ namespace EasyDapper
         private string BuildFromClause()
         {
             var tableName = GetTableName(typeof(T));
-            return $" FROM {tableName} AS {tableName}";
+            //return $" FROM {tableName} AS {tableName}";
+            return $" FROM {tableName} ";
         }
         private string BuildJoinClauses()
         {
@@ -560,7 +561,8 @@ namespace EasyDapper
                 sb.Append(" ")
                   .Append(join.JoinType)
                   .Append(" ")
-                  .Append($"{join.TableName} AS {join.TableName}")
+                  //.Append($"{join.TableName} AS {join.TableName}")
+                  .Append($"{join.TableName}")
                   .Append(" ON ")
                   .Append(join.OnCondition);
             }
