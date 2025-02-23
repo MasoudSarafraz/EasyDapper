@@ -120,11 +120,11 @@ namespace EasyDapper
                 if (string.IsNullOrEmpty(currentColumns))
                 {
                     currentColumns = columnName;
-                }                    
+                }
                 else
                 {
                     currentColumns += ", " + columnName;
-                }                    
+                }
             }
             _selectedColumns = currentColumns;
             return this;
@@ -217,10 +217,8 @@ namespace EasyDapper
         {
             var leftTableName = GetTableName(typeof(TLeft));
             var rightTableName = GetTableName(typeof(TRight));
-
             var parsedOnCondition = ParseExpression(onCondition.Body);
             var tableName = GetTableName(typeof(TRight));
-
             _joins.Add(new JoinInfo
             {
                 JoinType = joinType,
@@ -235,7 +233,6 @@ namespace EasyDapper
             var parsedOnCondition = ParseExpression(onCondition.Body);
             var alias = "t" + (_applies.Count + 1);
             parsedOnCondition = parsedOnCondition.Replace("[", $"{alias}.");
-
             _applies.Add(new ApplyInfo
             {
                 ApplyType = applyType,
@@ -316,7 +313,6 @@ namespace EasyDapper
             _distinctClause = "DISTINCT";
             return this;
         }
-
         public IQueryBuilder<T> Top(int count)
         {
             if (count <= 0)
@@ -326,36 +322,30 @@ namespace EasyDapper
             _topClause = $"TOP {count}";
             return this;
         }
-
         public IQueryBuilder<T> Union(IQueryBuilder<T> queryBuilder)
         {
             if (queryBuilder == null) throw new ArgumentNullException(nameof(queryBuilder));
             _unionClause = $" UNION {queryBuilder.BuildQuery()}";
             return this;
         }
-
         public IQueryBuilder<T> UnionAll(IQueryBuilder<T> queryBuilder)
         {
             if (queryBuilder == null) throw new ArgumentNullException(nameof(queryBuilder));
             _unionClause = $" UNION ALL {queryBuilder.BuildQuery()}";
             return this;
         }
-
         public IQueryBuilder<T> Intersect(IQueryBuilder<T> queryBuilder)
         {
             if (queryBuilder == null) throw new ArgumentNullException(nameof(queryBuilder));
             _intersectClause = $" INTERSECT {queryBuilder.BuildQuery()}";
             return this;
         }
-
         public IQueryBuilder<T> Except(IQueryBuilder<T> queryBuilder)
         {
             if (queryBuilder == null) throw new ArgumentNullException(nameof(queryBuilder));
             _exceptClause = $" EXCEPT {queryBuilder.BuildQuery()}";
             return this;
         }
-
-
         string IQueryBuilder<T>.BuildQuery()
         {
             var selectClause = BuildSelectClause();
@@ -380,7 +370,6 @@ namespace EasyDapper
             sb.Append(_unionClause);
             sb.Append(_intersectClause);
             sb.Append(_exceptClause);
-
             return sb.ToString();
         }
         private string BuildGroupByClause()
@@ -420,13 +409,17 @@ namespace EasyDapper
         private string HandleEqual(BinaryExpression expression)
         {
             if (IsNullConstant(expression.Right))
+            {
                 return ParseMember(expression.Left) + " IS NULL";
+            }                
             return HandleBinary(expression, "=");
         }
         private string HandleNotEqual(BinaryExpression expression)
         {
             if (IsNullConstant(expression.Right))
+            {
                 return ParseMember(expression.Left) + " IS NOT NULL";
+            }                
             return HandleBinary(expression, "<>");
         }
         private string HandleBinary(BinaryExpression expression, string op)
@@ -615,7 +608,7 @@ namespace EasyDapper
             if (!string.IsNullOrEmpty(columns))
             {
                 result += $" {columns}"; ;
-            }            
+            }
             return result;
         }
         private string BuildFromClause()
