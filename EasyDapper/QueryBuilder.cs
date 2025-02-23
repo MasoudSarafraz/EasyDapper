@@ -118,9 +118,13 @@ namespace EasyDapper
             {
                 string columnName = ParseMember(column.Body);
                 if (string.IsNullOrEmpty(currentColumns))
+                {
                     currentColumns = columnName;
+                }                    
                 else
+                {
                     currentColumns += ", " + columnName;
+                }                    
             }
             _selectedColumns = currentColumns;
             return this;
