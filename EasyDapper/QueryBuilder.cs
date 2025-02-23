@@ -188,7 +188,7 @@ namespace EasyDapper
         {
             var parsedOnCondition = ParseExpression(onCondition.Body);
             var tableName = GetTableName(typeof(TJoin));
-            var alias = "t" + (_joins.Count + 1);
+            var alias = "T" + (_joins.Count + 1);
             var onClause = parsedOnCondition.Replace("[", $"{alias}.");
             if (additionalConditions != null && additionalConditions.Length > 0)
             {
@@ -221,7 +221,7 @@ namespace EasyDapper
             var parsedOnCondition = ParseExpression(onCondition.Body);
             // افزایش شمارنده جدول‌های پیوسته
             _joinCounter++;
-            var alias = "t" + _joinCounter + 1;
+            var alias = "T" + _joinCounter + 1;
             // جایگزینی نام جدول با alias در شرط JOIN
             parsedOnCondition = parsedOnCondition.Replace(leftTableName, "t1").Replace(rightTableName, alias);
             _joins.Add(new JoinInfo
@@ -237,7 +237,7 @@ namespace EasyDapper
             var subQueryInstance = new QueryBuilder<TSubQuery>(_lazyConnection.Value) as IQueryBuilder<TSubQuery>;
             var subQuery = ((IQueryBuilder<TSubQuery>)subQueryBuilder(subQueryInstance)).BuildQuery(); // Explicit Call
             var parsedOnCondition = ParseExpression(onCondition.Body);
-            var alias = "t" + (_applies.Count + 1);
+            var alias = "T" + (_applies.Count + 1);
             parsedOnCondition = parsedOnCondition.Replace("[", $"{alias}.");
             _applies.Add(new ApplyInfo
             {
@@ -509,7 +509,7 @@ namespace EasyDapper
         {
             if (tableName == GetTableName(typeof(T)))
             {
-                return "t1";
+                return "T1";
             }
             foreach (var join in _joins)
             {
@@ -636,7 +636,7 @@ namespace EasyDapper
         private string BuildFromClause()
         {
             var tableName = GetTableName(typeof(T));
-            return $" FROM {tableName} AS t1";
+            return $" FROM {tableName} AS T1";
         }
         private string BuildJoinClauses()
         {
