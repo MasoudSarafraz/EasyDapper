@@ -31,6 +31,7 @@ namespace EasyDapper
         private readonly List<string> _groupByColumns = new List<string>();
         private string _havingClause = string.Empty;
         private int _timeOut;
+
         //internal QueryBuilder(string connectionString)
         //{
         //    if (string.IsNullOrEmpty(connectionString))
@@ -183,7 +184,7 @@ namespace EasyDapper
             {
                 foreach (var condition in additionalConditions)
                 {
-                    var parsedCondition = ParseExpression(condition.Body).Replace("[", $"{alias}.[");
+                    var parsedCondition = ParseExpression(condition.Body);
                     onClause += $" AND {parsedCondition}";
                 }
             }
@@ -301,6 +302,8 @@ namespace EasyDapper
             _havingClause = ParseExpression(havingCondition.Body);
             return this;
         }
+
+
         string IQueryBuilder<T>.BuildQuery()
         {
             var selectClause = BuildSelectClause();
@@ -322,6 +325,7 @@ namespace EasyDapper
             if (!string.IsNullOrEmpty(havingClause)) sb.Append(" ").Append(havingClause);
             if (!string.IsNullOrEmpty(orderByClause)) sb.Append(" ").Append(orderByClause);
             if (!string.IsNullOrEmpty(paginationClause)) sb.Append(" ").Append(paginationClause);
+
 
             return sb.ToString();
         }
@@ -443,7 +447,7 @@ namespace EasyDapper
             if (expression is MemberExpression member)
             {
                 var tableName = GetTableName(member.Expression.Type);
-                return $"{tableName}.[{member.Member.Name}]";
+                return $"{tableName}.{GetColumnName(member.Member as PropertyInfo)}";
             }
             throw new NotSupportedException($"Unsupported expression: {expression}");
         }
@@ -464,7 +468,7 @@ namespace EasyDapper
             else if (expression is MemberExpression member)
             {
                 var tableAlias = GetTableName(member.Expression.Type);
-                return $"{tableAlias}.[{member.Member.Name}]";
+                return $"{tableAlias}.{GetColumnName(member.Member as PropertyInfo)}";
             }
             else if (expression is BinaryExpression binary)
             {
