@@ -11,6 +11,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using Dapper;
 using EasyDapper.Attributes;
+using static System.Net.Mime.MediaTypeNames;
 
 namespace EasyDapper
 {
@@ -36,7 +37,7 @@ namespace EasyDapper
         private string _unionClause = string.Empty;
         private string _intersectClause = string.Empty;
         private string _exceptClause = string.Empty;
-
+        private int _joinCounter = 0;
         //internal QueryBuilder(string connectionString)
         //{
         //    if (string.IsNullOrEmpty(connectionString))
@@ -218,11 +219,16 @@ namespace EasyDapper
             var leftTableName = GetTableName(typeof(TLeft));
             var rightTableName = GetTableName(typeof(TRight));
             var parsedOnCondition = ParseExpression(onCondition.Body);
-            var tableName = GetTableName(typeof(TRight));
+            // افزایش شمارنده جدول‌های پیوسته
+            _joinCounter++;
+            var alias = "t" + _joinCounter + 1;
+            // جایگزینی نام جدول با alias در شرط JOIN
+            parsedOnCondition = parsedOnCondition.Replace(leftTableName, "t1").Replace(rightTableName, alias);
             _joins.Add(new JoinInfo
             {
                 JoinType = joinType,
-                TableName = tableName,
+                TableName = rightTableName,
+                Alias = alias,
                 OnCondition = parsedOnCondition
             });
         }
@@ -411,7 +417,7 @@ namespace EasyDapper
             if (IsNullConstant(expression.Right))
             {
                 return ParseMember(expression.Left) + " IS NULL";
-            }                
+            }
             return HandleBinary(expression, "=");
         }
         private string HandleNotEqual(BinaryExpression expression)
@@ -419,7 +425,7 @@ namespace EasyDapper
             if (IsNullConstant(expression.Right))
             {
                 return ParseMember(expression.Left) + " IS NOT NULL";
-            }                
+            }
             return HandleBinary(expression, "<>");
         }
         private string HandleBinary(BinaryExpression expression, string op)
@@ -494,9 +500,25 @@ namespace EasyDapper
             if (expression is MemberExpression member)
             {
                 var tableName = GetTableName(member.Expression.Type);
-                return $"{tableName}.{GetColumnName(member.Member as PropertyInfo)}";
+                var alias = GetAliasForTable(tableName);
+                return $"{alias}.{GetColumnName(member.Member as PropertyInfo)}";
             }
             throw new NotSupportedException($"Unsupported expression: {expression}");
+        }
+        private string GetAliasForTable(string tableName)
+        {
+            if (tableName == GetTableName(typeof(T)))
+            {
+                return "t1";
+            }
+            foreach (var join in _joins)
+            {
+                if (join.TableName == tableName)
+                {
+                    return join.Alias;
+                }
+            }
+            throw new InvalidOperationException($"Alias for table {tableName} not found.");
         }
         private string ParseValue(Expression expression, string format = null)
         {
@@ -586,7 +608,7 @@ namespace EasyDapper
         {
             var columns = _isCountQuery ? "COUNT(*) AS TotalCount"
                 : string.IsNullOrEmpty(_selectedColumns)
-                ? string.Join(", ", typeof(T).GetProperties().Select(p => $"{GetTableName(typeof(T))}.{GetColumnName(p)} AS {p.Name}"))
+                ? string.Join(", ", typeof(T).GetProperties().Select(p => $"{GetAliasForTable(GetTableName(typeof(T)))}.{GetColumnName(p)} AS {p.Name}"))
                 : _selectedColumns;
             if (!string.IsNullOrEmpty(_rowNumberClause))
             {
@@ -614,8 +636,7 @@ namespace EasyDapper
         private string BuildFromClause()
         {
             var tableName = GetTableName(typeof(T));
-            //return $" FROM {tableName} AS {tableName}";
-            return $" FROM {tableName} ";
+            return $" FROM {tableName} AS t1";
         }
         private string BuildJoinClauses()
         {
@@ -625,8 +646,7 @@ namespace EasyDapper
                 sb.Append(" ")
                   .Append(join.JoinType)
                   .Append(" ")
-                  //.Append($"{join.TableName} AS {join.TableName}")
-                  .Append($"{join.TableName}")
+                  .Append($"{join.TableName} AS {join.Alias}")
                   .Append(" ON ")
                   .Append(join.OnCondition);
             }
