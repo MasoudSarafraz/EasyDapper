@@ -31,6 +31,11 @@ namespace EasyDapper
         private readonly List<string> _groupByColumns = new List<string>();
         private string _havingClause = string.Empty;
         private int _timeOut;
+        private string _distinctClause = string.Empty;
+        private string _topClause = string.Empty;
+        private string _unionClause = string.Empty;
+        private string _intersectClause = string.Empty;
+        private string _exceptClause = string.Empty;
 
         //internal QueryBuilder(string connectionString)
         //{
@@ -302,6 +307,49 @@ namespace EasyDapper
             _havingClause = ParseExpression(havingCondition.Body);
             return this;
         }
+        public IQueryBuilder<T> Distinct()
+        {
+            _distinctClause = "DISTINCT";
+            return this;
+        }
+
+        public IQueryBuilder<T> Top(int count)
+        {
+            if (count <= 0)
+            {
+                throw new ArgumentOutOfRangeException(nameof(count), "Top count must be greater than zero.");
+            }
+            _topClause = $"TOP {count}";
+            return this;
+        }
+
+        public IQueryBuilder<T> Union(IQueryBuilder<T> queryBuilder)
+        {
+            if (queryBuilder == null) throw new ArgumentNullException(nameof(queryBuilder));
+            _unionClause = $" UNION {queryBuilder.BuildQuery()}";
+            return this;
+        }
+
+        public IQueryBuilder<T> UnionAll(IQueryBuilder<T> queryBuilder)
+        {
+            if (queryBuilder == null) throw new ArgumentNullException(nameof(queryBuilder));
+            _unionClause = $" UNION ALL {queryBuilder.BuildQuery()}";
+            return this;
+        }
+
+        public IQueryBuilder<T> Intersect(IQueryBuilder<T> queryBuilder)
+        {
+            if (queryBuilder == null) throw new ArgumentNullException(nameof(queryBuilder));
+            _intersectClause = $" INTERSECT {queryBuilder.BuildQuery()}";
+            return this;
+        }
+
+        public IQueryBuilder<T> Except(IQueryBuilder<T> queryBuilder)
+        {
+            if (queryBuilder == null) throw new ArgumentNullException(nameof(queryBuilder));
+            _exceptClause = $" EXCEPT {queryBuilder.BuildQuery()}";
+            return this;
+        }
 
 
         string IQueryBuilder<T>.BuildQuery()
@@ -325,7 +373,9 @@ namespace EasyDapper
             if (!string.IsNullOrEmpty(havingClause)) sb.Append(" ").Append(havingClause);
             if (!string.IsNullOrEmpty(orderByClause)) sb.Append(" ").Append(orderByClause);
             if (!string.IsNullOrEmpty(paginationClause)) sb.Append(" ").Append(paginationClause);
-
+            sb.Append(_unionClause);
+            sb.Append(_intersectClause);
+            sb.Append(_exceptClause);
 
             return sb.ToString();
         }
@@ -549,7 +599,20 @@ namespace EasyDapper
             {
                 columns = string.Join(", ", _aggregateColumns) + (string.IsNullOrEmpty(columns) ? "" : ", " + columns);
             }
-            return "SELECT " + columns;
+            var result = $"SELECT";
+            if (!string.IsNullOrEmpty(_distinctClause))
+            {
+                result += $" {_distinctClause}";
+            }
+            if (!string.IsNullOrEmpty(_topClause))
+            {
+                result += $" {_topClause}";
+            }
+            if (!string.IsNullOrEmpty(columns))
+            {
+                result += $" {columns}"; ;
+            }            
+            return result;
         }
         private string BuildFromClause()
         {

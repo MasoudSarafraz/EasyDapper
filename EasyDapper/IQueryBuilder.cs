@@ -32,6 +32,11 @@ namespace EasyDapper
         IQueryBuilder<T> Count(Expression<Func<T, object>> column, string alias = null);
         IQueryBuilder<T> GroupBy(params Expression<Func<T, object>>[] groupByColumns);
         IQueryBuilder<T> Having(Expression<Func<T, bool>> havingCondition);
+        IQueryBuilder<T> Top(int count);
+        IQueryBuilder<T> Union(IQueryBuilder<T> queryBuilder);
+        IQueryBuilder<T> UnionAll(IQueryBuilder<T> queryBuilder);
+        IQueryBuilder<T> Intersect(IQueryBuilder<T> queryBuilder);
+        IQueryBuilder<T> Except(IQueryBuilder<T> queryBuilder);
         // Explicit Method for BuildQuery
         // به دلیل اینکه کلاس اینترنال هستش متد های outerapply و crossapply به مشکل میخوردند . بنابراین
         string BuildQuery();
