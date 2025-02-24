@@ -184,27 +184,9 @@ namespace EasyDapper
             AddApply("OUTER APPLY", onCondition, subQueryBuilder);
             return this;
         }
-        public IQueryBuilder<T> CustomJoin<TJoin>(string joinType, Expression<Func<T, TJoin, bool>> onCondition, params Expression<Func<TJoin, bool>>[] additionalConditions)
+        public IQueryBuilder<T> CustomJoin<TLeft, TRight>(string stringJoin, Expression<Func<TLeft, TRight, bool>> onCondition)
         {
-            var parsedOnCondition = ParseExpression(onCondition.Body);
-            var tableName = GetTableName(typeof(TJoin));
-            var alias = "T" + (_joins.Count + 1);
-            var onClause = parsedOnCondition.Replace("[", $"{alias}.");
-            if (additionalConditions != null && additionalConditions.Length > 0)
-            {
-                foreach (var condition in additionalConditions)
-                {
-                    var parsedCondition = ParseExpression(condition.Body);
-                    onClause += $" AND {parsedCondition}";
-                }
-            }
-            _joins.Add(new JoinInfo
-            {
-                JoinType = joinType,
-                TableName = tableName,
-                Alias = alias,
-                OnCondition = onClause
-            });
+            AddJoin(stringJoin, onCondition);
             return this;
         }
         public IQueryBuilder<T> Row_Number(Expression<Func<T, object>> partitionBy, Expression<Func<T, object>> orderBy)
@@ -216,14 +198,15 @@ namespace EasyDapper
         }
         private void AddJoin<TLeft, TRight>(string joinType, Expression<Func<TLeft, TRight, bool>> onCondition)
         {
-            var leftTableName = GetTableName(typeof(TLeft));
-            var rightTableName = GetTableName(typeof(TRight));
-            var parsedOnCondition = ParseExpression(onCondition.Body);
+            var leftTableName = GetTableName(GetConditionType<TLeft>(onCondition.Body));
+            var rightTableName = GetTableName(GetConditionType<TRight>(onCondition.Body));
+            var ex = CorrectCondition<TLeft, TRight>(onCondition.Body);
+            var parsedOnCondition = ParseExpression(ex);
             // افزایش شمارنده جدول‌های پیوسته
             _joinCounter++;
             var alias = "T" + _joinCounter + 1;
             // جایگزینی نام جدول با alias در شرط JOIN
-            parsedOnCondition = parsedOnCondition.Replace(leftTableName, "t1").Replace(rightTableName, alias);
+            parsedOnCondition = parsedOnCondition.Replace(GetAliasForTable(leftTableName), "T1").Replace(rightTableName, alias);
             _joins.Add(new JoinInfo
             {
                 JoinType = joinType,
@@ -232,6 +215,7 @@ namespace EasyDapper
                 OnCondition = parsedOnCondition
             });
         }
+
         private void AddApply<TSubQuery>(string applyType, Expression<Func<T, TSubQuery, bool>> onCondition, Func<IQueryBuilder<TSubQuery>, IQueryBuilder<TSubQuery>> subQueryBuilder)
         {
             var subQueryInstance = new QueryBuilder<TSubQuery>(_lazyConnection.Value) as IQueryBuilder<TSubQuery>;
@@ -507,7 +491,7 @@ namespace EasyDapper
         }
         private string GetAliasForTable(string tableName)
         {
-            if (tableName == GetTableName(typeof(T)))
+            if (tableName == GetTableName(typeof(T)) || !_joins.Any())
             {
                 return "T1";
             }
@@ -679,6 +663,61 @@ namespace EasyDapper
                 return $"OFFSET {_offset} ROWS FETCH NEXT {_limit} ROWS ONLY";
             }
             return "";
+        }
+        private Expression CorrectCondition<TLeft, TRight>(Expression body)
+        {
+            if (body is BinaryExpression binaryExpression)
+            {
+                // بررسی سمت چپ عبارت
+                if (binaryExpression.Left is MemberExpression leftMember &&
+                    leftMember.Expression != null &&
+                    leftMember.Expression.Type == typeof(TLeft))
+                {
+                    return body;
+                }
+                // بررسی سمت راست عبارت
+                if (binaryExpression.Right is MemberExpression rightMember &&
+                    rightMember.Expression != null &&
+                    rightMember.Expression.Type == typeof(TRight))
+                {
+                    return body;
+                }
+                // اگر شرایط بالا برقرار نباشد، جای سمت چپ و راست را عوض کنیم
+                return Expression.MakeBinary(
+                    binaryExpression.NodeType,
+                    binaryExpression.Right,
+                    binaryExpression.Left,
+                    binaryExpression.IsLiftedToNull,
+                    binaryExpression.Method
+                );
+            }
+            return body;
+        }
+
+        private Type GetConditionType<TCompaire>(Expression value)
+        {
+            if (value is BinaryExpression binaryExpression)
+            {
+                // بررسی سمت چپ عبارت
+                if (binaryExpression.Left is MemberExpression leftMember &&
+                    leftMember.Expression != null)
+                {
+                    if (leftMember.Expression.Type == typeof(TCompaire))
+                    {
+                        return leftMember.Expression.Type;
+                    }
+                }
+                // بررسی سمت راست عبارت
+                if (binaryExpression.Right is MemberExpression rightMember &&
+                    rightMember.Expression != null)
+                {
+                    if (rightMember.Expression.Type == typeof(TCompaire))
+                    {
+                        return rightMember.Expression.Type;
+                    }
+                }
+            }
+            return typeof(TCompaire);
         }
         public void Dispose()
         {
