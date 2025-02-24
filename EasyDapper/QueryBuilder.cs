@@ -216,19 +216,79 @@ namespace EasyDapper
             });
         }
 
-        private void AddApply<TSubQuery>(string applyType, Expression<Func<T, TSubQuery, bool>> onCondition, Func<IQueryBuilder<TSubQuery>, IQueryBuilder<TSubQuery>> subQueryBuilder)
+        //private void AddApply<TSubQuery>(string applyType, Expression<Func<T, TSubQuery, bool>> onCondition, Func<IQueryBuilder<TSubQuery>, IQueryBuilder<TSubQuery>> subQueryBuilder)
+        //{
+        //    var subQueryInstance = new QueryBuilder<TSubQuery>(_lazyConnection.Value);
+        //    var modifiedSubQuery = subQueryBuilder(subQueryInstance);
+        //    var subQuerySql = ((QueryBuilder<TSubQuery>)modifiedSubQuery).BuildQuery();
+        //    foreach (var param in ((QueryBuilder<TSubQuery>)modifiedSubQuery)._parameters)
+        //    {
+        //        _parameters[param.Key] = param.Value;
+        //    }
+        //    var alias = "T" + (_applies.Count + 2);
+        //    var onConditionString = ParseExpression(onCondition.Body);
+        //    onConditionString = onConditionString
+        //        .Replace(GetTableName(typeof(T)) + ".", "T1.")
+        //        .Replace(GetTableName(typeof(TSubQuery)) + ".", alias + ".");
+        //    var propertyMap = typeof(TSubQuery).GetProperties()
+        //        .ToDictionary(
+        //            p => GetColumnName(p),
+        //            p => p.Name
+        //        );
+
+        //    foreach (var mapping in propertyMap)
+        //    {
+        //        onConditionString = onConditionString.Replace(
+        //            $"{alias}.[{mapping.Key.Trim('[', ']')}]",
+        //            $"{alias}.{mapping.Value}"
+        //        );
+        //    }
+        //    _applies.Add(new ApplyInfo
+        //    {
+        //        ApplyType = applyType,
+        //        SubQuery = $"({subQuerySql}) AS {alias} WHERE {onConditionString}"
+        //    });
+        //}
+        private void AddApply<TSubQuery>(
+            string applyType,
+            Expression<Func<T, TSubQuery, bool>> onCondition,
+            Func<IQueryBuilder<TSubQuery>, IQueryBuilder<TSubQuery>> subQueryBuilder)
         {
-            var subQueryInstance = new QueryBuilder<TSubQuery>(_lazyConnection.Value) as IQueryBuilder<TSubQuery>;
-            var subQuery = ((IQueryBuilder<TSubQuery>)subQueryBuilder(subQueryInstance)).BuildQuery(); // Explicit Call
-            var parsedOnCondition = ParseExpression(onCondition.Body);
-            var alias = "T" + (_applies.Count + 1);
-            parsedOnCondition = parsedOnCondition.Replace("[", $"{alias}.");
-            _applies.Add(new ApplyInfo
+            if (onCondition == null)
+                throw new ArgumentNullException(nameof(onCondition));
+            if (subQueryBuilder == null)
+                throw new ArgumentNullException(nameof(subQueryBuilder));
+            var subQueryInstance = new QueryBuilder<TSubQuery>(_lazyConnection.Value);
+            if (subQueryBuilder(subQueryInstance) is QueryBuilder<TSubQuery> query)
             {
-                ApplyType = applyType,
-                SubQuery = $"({subQuery}) AS {alias} ON {parsedOnCondition}"
-            });
+                var alias = $"T{_applies.Count + 2}";
+                var whereCondition = ParseExpression(onCondition.Body)
+                    .Replace(GetTableName(typeof(T)) + ".", "T1.")
+                    .Replace(GetTableName(typeof(TSubQuery)) + ".", $"{alias}.");
+                var columnMappings = typeof(TSubQuery)
+                    .GetProperties()
+                    .ToDictionary(
+                        p => $"{alias}.[{GetColumnName(p).Trim('[', ']')}]",
+                        p => $"{alias}.{p.Name}"
+                    );
+
+                foreach (var param in query._parameters)
+                    _parameters[param.Key] = param.Value;
+
+                foreach (var mapping in columnMappings)
+                    whereCondition = whereCondition.Replace(mapping.Key, mapping.Value);
+
+                _applies.Add(new ApplyInfo
+                {
+                    ApplyType = applyType,
+                    SubQuery = $"({((IQueryBuilder<TSubQuery>)query).BuildQuery()}) AS {alias} WHERE {whereCondition}"
+                });
+            }
         }
+        //private string BuildQuery()
+        //{
+        //    return ((IQueryBuilder<T>)this).BuildQuery();
+        //}
         public IQueryBuilder<T> Sum(Expression<Func<T, object>> column, string alias = null)
         {
             var parsedColumn = ParseMember(column.Body);
@@ -649,7 +709,7 @@ namespace EasyDapper
             return sb.ToString();
         }
         private string BuildWhereClause()
-        {
+        {            
             return _filters.Any() ? "WHERE " + string.Join(" AND ", _filters) : "";
         }
         private string BuildOrderByClause()
