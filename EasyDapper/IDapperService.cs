@@ -9,7 +9,7 @@ namespace EasyDapper
 {
     public interface IDapperService : IDisposable
     {
-        IQueryBuilder<T> QueryBuilder<T>();
+        IQueryBuilder<T> Query<T>();
         //IStoredProcedureExecutor<T> CreateStoredProcedureExecutor<T>();
         int Insert<T>(T entity) where T : class;
         Task<int> InsertAsync<T>(T entity) where T : class;

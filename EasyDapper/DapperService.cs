@@ -301,7 +301,7 @@ namespace EasyDapper
 
             return await connection.QueryFirstOrDefaultAsync<T>(query, parameters, _transaction, _timeOut);
         }
-        public IQueryBuilder<T> QueryBuilder<T>()
+        public IQueryBuilder<T> Query<T>()
         {
             if (_externalConnection != null)
             {
