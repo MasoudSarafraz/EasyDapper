@@ -338,7 +338,7 @@ namespace EasyDapper
             }
             return new QueryBuilder<T>(_lazyConnection.Value);
         }
-        public IEnumerable<T> ExecuteStoredProcedure<T>(string procedureName, object parameters = null)
+        public IEnumerable<T> ExecuteStoredProcedure<T>(string procedureName, object parameters = null) where T : class
         {
             IsValidProcedureName(procedureName);
             var openConnection = GetOpenConnection();
@@ -351,7 +351,7 @@ namespace EasyDapper
             commandType: CommandType.StoredProcedure
             );
         }
-        public async Task<IEnumerable<T>> ExecuteStoredProcedureAsync<T>(string procedureName, object parameters = null, CancellationToken cancellationToken = default)
+        public async Task<IEnumerable<T>> ExecuteStoredProcedureAsync<T>(string procedureName, object parameters = null, CancellationToken cancellationToken = default) where T : class
         {
             IsValidProcedureName(procedureName);
             var openConnection = await GetOpenConnectionAsync();
@@ -367,7 +367,7 @@ namespace EasyDapper
             )
             ).ConfigureAwait(false);
         }
-        public T ExecuteMultiResultStoredProcedure<T>(string procedureName, Func<SqlMapper.GridReader, T> mapper, object parameters = null, IDbTransaction transaction = null, int? commandTimeout = null)
+        public T ExecuteMultiResultStoredProcedure<T>(string procedureName, Func<SqlMapper.GridReader, T> mapper, object parameters = null, IDbTransaction transaction = null, int? commandTimeout = null) where T : class
         {
             IsValidProcedureName(procedureName);
             var openConnection = GetOpenConnection();
@@ -381,7 +381,7 @@ namespace EasyDapper
                 return mapper(multi);
             }
         }
-        public async Task<T> ExecuteMultiResultStoredProcedureAsync<T>(string procedureName, Func<SqlMapper.GridReader, Task<T>> asyncMapper, object parameters = null, IDbTransaction transaction = null, int? commandTimeout = null, CancellationToken cancellationToken = default)
+        public async Task<T> ExecuteMultiResultStoredProcedureAsync<T>(string procedureName, Func<SqlMapper.GridReader, Task<T>> asyncMapper, object parameters = null, IDbTransaction transaction = null, int? commandTimeout = null, CancellationToken cancellationToken = default) where T : class
         {
             IsValidProcedureName(procedureName);
             var openConnection = await GetOpenConnectionAsync();
