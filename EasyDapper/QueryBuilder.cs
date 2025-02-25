@@ -326,68 +326,81 @@ namespace EasyDapper
             });
         }
         //private void AddApply<TSubQuery>(string applyType, Expression<Func<T, TSubQuery, bool>> onCondition, Func<IQueryBuilder<TSubQuery>, IQueryBuilder<TSubQuery>> subQueryBuilder)
+        //این متد درست کار میکرد، فقط ساب کوئری نال رو قبول نمیکرد
         //{
         //    var subQueryInstance = new QueryBuilder<TSubQuery>(_lazyConnection.Value);
-        //    var modifiedSubQuery = subQueryBuilder(subQueryInstance);
-        //    var subQuerySql = ((QueryBuilder<TSubQuery>)modifiedSubQuery).BuildQuery();
-        //    foreach (var param in ((QueryBuilder<TSubQuery>)modifiedSubQuery)._parameters)
+        //    if (subQueryBuilder(subQueryInstance) is QueryBuilder<TSubQuery> query)
         //    {
-        //        _parameters[param.Key] = param.Value;
+        //        var applyAlias = $"T{_applies.Count + 2}";
+        //        var subQuerySql = ((IQueryBuilder<TSubQuery>)query).BuildQuery();
+        //        subQuerySql = subQuerySql.Replace(" AS T1", "");
+        //        subQuerySql = subQuerySql.Replace("T1.", "");
+        //        var onConditionString = ParseExpression(onCondition.Body)
+        //            .Replace("T1.", $"{GetAliasForTable(GetTableName(typeof(T)))}.")
+        //            .Replace($"{GetTableName(typeof(TSubQuery))}.", "");
+        //        if (subQuerySql.IndexOf("WHERE", StringComparison.OrdinalIgnoreCase) >= 0)
+        //        {
+        //            subQuerySql = subQuerySql.Replace("WHERE", $"WHERE {onConditionString} AND");
+        //        }
+        //        else
+        //        {
+        //            subQuerySql += $" WHERE {onConditionString}";
+        //        }
+        //        foreach (var param in query._parameters)
+        //        {
+        //            _parameters[param.Key] = param.Value;
+        //        }
+        //        _applies.Add(new ApplyInfo
+        //        {
+        //            ApplyType = applyType,
+        //            SubQuery = $"({subQuerySql}) AS {applyAlias}"
+        //        });
         //    }
-        //    var alias = "T" + (_applies.Count + 2);
-        //    var onConditionString = ParseExpression(onCondition.Body);
-        //    onConditionString = onConditionString
-        //        .Replace(GetTableName(typeof(T)) + ".", "T1.")
-        //        .Replace(GetTableName(typeof(TSubQuery)) + ".", alias + ".");
-        //    var propertyMap = typeof(TSubQuery).GetProperties()
-        //        .ToDictionary(
-        //            p => GetColumnName(p),
-        //            p => p.Name
-        //        );
-
-        //    foreach (var mapping in propertyMap)
-        //    {
-        //        onConditionString = onConditionString.Replace(
-        //            $"{alias}.[{mapping.Key.Trim('[', ']')}]",
-        //            $"{alias}.{mapping.Value}"
-        //        );
-        //    }
-        //    _applies.Add(new ApplyInfo
-        //    {
-        //        ApplyType = applyType,
-        //        SubQuery = $"({subQuerySql}) AS {alias} WHERE {onConditionString}"
-        //    });
         //}
-        private void AddApply<TSubQuery>(string applyType, Expression<Func<T, TSubQuery, bool>> onCondition, Func<IQueryBuilder<TSubQuery>, IQueryBuilder<TSubQuery>> subQueryBuilder)
+        private void AddApply<TSubQuery>(string applyType, Expression<Func<T, TSubQuery, bool>> onCondition, Func<IQueryBuilder<TSubQuery>, IQueryBuilder<TSubQuery>> subQueryBuilder = null)
         {
             var subQueryInstance = new QueryBuilder<TSubQuery>(_lazyConnection.Value);
-            if (subQueryBuilder(subQueryInstance) is QueryBuilder<TSubQuery> query)
+            string subQuerySql;
+            var applyAlias = $"T{_applies.Count + 2}";
+            if (subQueryBuilder != null)
             {
-                var applyAlias = $"T{_applies.Count + 2}";
-                var subQuerySql = ((IQueryBuilder<TSubQuery>)query).BuildQuery();
-                subQuerySql = subQuerySql.Replace(" AS T1", "");
-                subQuerySql = subQuerySql.Replace("T1.", "");
-                var onConditionString = ParseExpression(onCondition.Body)
-                    .Replace("T1.", $"{GetAliasForTable(GetTableName(typeof(T)))}.")
-                    .Replace($"{GetTableName(typeof(TSubQuery))}.", "");
-                if (subQuerySql.IndexOf("WHERE", StringComparison.OrdinalIgnoreCase) >= 0)
+                if (subQueryBuilder(subQueryInstance) is QueryBuilder<TSubQuery> query)
                 {
-                    subQuerySql = subQuerySql.Replace("WHERE", $"WHERE {onConditionString} AND");
+                    subQuerySql = ((IQueryBuilder<TSubQuery>)query).BuildQuery();
+                    subQuerySql = subQuerySql.Replace(" AS T1", "");
+                    subQuerySql = subQuerySql.Replace("T1.", "");
+
+                    foreach (var param in query._parameters)
+                    {
+                        _parameters[param.Key] = param.Value;
+                    }
                 }
                 else
                 {
-                    subQuerySql += $" WHERE {onConditionString}";
+                    throw new Exception("Failed to build sub-query");
                 }
-                foreach (var param in query._parameters)
-                {
-                    _parameters[param.Key] = param.Value;
-                }
-                _applies.Add(new ApplyInfo
-                {
-                    ApplyType = applyType,
-                    SubQuery = $"({subQuerySql}) AS {applyAlias}"
-                });
             }
+            else
+            {                
+                subQuerySql = $"SELECT * FROM {GetTableName(typeof(TSubQuery))} WHERE 1=1";
+            }
+            var onConditionString = ParseExpression(onCondition.Body)
+                .Replace("T1.", $"{GetAliasForTable(GetTableName(typeof(T)))}.")
+                .Replace($"{GetTableName(typeof(TSubQuery))}.", "");
+
+            if (subQuerySql.IndexOf("WHERE", StringComparison.OrdinalIgnoreCase) >= 0)
+            {
+                subQuerySql = subQuerySql.Replace("WHERE", $"WHERE {onConditionString} AND");
+            }
+            else
+            {
+                subQuerySql += $" WHERE {onConditionString}";
+            }
+            _applies.Add(new ApplyInfo
+            {
+                ApplyType = applyType,
+                SubQuery = $"({subQuerySql}) AS {applyAlias}"
+            });
         }
         string IQueryBuilder<T>.BuildQuery()
         {
