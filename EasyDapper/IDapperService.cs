@@ -18,11 +18,11 @@ namespace EasyDapper
         int Update<T>(T entity) where T : class;
         Task<int> UpdateAsync<T>(T entity) where T : class;
         int UpdateList<T>(IEnumerable<T> entities) where T : class;
-        Task<int> UpdateListAsync<T>(IEnumerable<T> entities,CancellationToken cancellationToken = default) where T : class;
+        Task<int> UpdateListAsync<T>(IEnumerable<T> entities, CancellationToken cancellationToken = default) where T : class;
         int Delete<T>(T entity) where T : class;
         Task<int> DeleteAsync<T>(T entity) where T : class;
         int DeleteList<T>(IEnumerable<T> entities) where T : class;
-        Task<int> DeleteListAsync<T>(IEnumerable<T> entities,CancellationToken cancellationToken = default) where T : class;
+        Task<int> DeleteListAsync<T>(IEnumerable<T> entities, CancellationToken cancellationToken = default) where T : class;
         T GetById<T>(object Id) where T : class;
         Task<T> GetByIdAsync<T>(object Id) where T : class;
         T GetById<T>(T entity) where T : class;
