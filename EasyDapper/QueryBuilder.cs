@@ -249,42 +249,38 @@ namespace EasyDapper
         //        SubQuery = $"({subQuerySql}) AS {alias} WHERE {onConditionString}"
         //    });
         //}
-        private void AddApply<TSubQuery>(
-            string applyType,
-            Expression<Func<T, TSubQuery, bool>> onCondition,
-            Func<IQueryBuilder<TSubQuery>, IQueryBuilder<TSubQuery>> subQueryBuilder)
+        private void AddApply<TSubQuery>(string applyType, Expression<Func<T, TSubQuery, bool>> onCondition, Func<IQueryBuilder<TSubQuery>, IQueryBuilder<TSubQuery>> subQueryBuilder)
         {
-            if (onCondition == null)
-                throw new ArgumentNullException(nameof(onCondition));
-            if (subQueryBuilder == null)
-                throw new ArgumentNullException(nameof(subQueryBuilder));
             var subQueryInstance = new QueryBuilder<TSubQuery>(_lazyConnection.Value);
             if (subQueryBuilder(subQueryInstance) is QueryBuilder<TSubQuery> query)
             {
-                var alias = $"T{_applies.Count + 2}";
-                var whereCondition = ParseExpression(onCondition.Body)
-                    .Replace(GetTableName(typeof(T)) + ".", "T1.")
-                    .Replace(GetTableName(typeof(TSubQuery)) + ".", $"{alias}.");
-                var columnMappings = typeof(TSubQuery)
-                    .GetProperties()
-                    .ToDictionary(
-                        p => $"{alias}.[{GetColumnName(p).Trim('[', ']')}]",
-                        p => $"{alias}.{p.Name}"
-                    );
-
+                var applyAlias = $"T{_applies.Count + 2}";
+                var subQuerySql = ((IQueryBuilder<TSubQuery>)query).BuildQuery();
+                subQuerySql = subQuerySql.Replace(" AS T1", "");
+                subQuerySql = subQuerySql.Replace("T1.", "");
+                var onConditionString = ParseExpression(onCondition.Body)
+                    .Replace("T1.", $"{GetAliasForTable(GetTableName(typeof(T)))}.")
+                    .Replace($"{GetTableName(typeof(TSubQuery))}.", "");
+                if (subQuerySql.IndexOf("WHERE", StringComparison.OrdinalIgnoreCase) >= 0)
+                {
+                    subQuerySql = subQuerySql.Replace("WHERE", $"WHERE {onConditionString} AND");
+                }
+                else
+                {
+                    subQuerySql += $" WHERE {onConditionString}";
+                }
                 foreach (var param in query._parameters)
+                {
                     _parameters[param.Key] = param.Value;
-
-                foreach (var mapping in columnMappings)
-                    whereCondition = whereCondition.Replace(mapping.Key, mapping.Value);
-
+                }
                 _applies.Add(new ApplyInfo
                 {
                     ApplyType = applyType,
-                    SubQuery = $"({((IQueryBuilder<TSubQuery>)query).BuildQuery()}) AS {alias} WHERE {whereCondition}"
+                    SubQuery = $"({subQuerySql}) AS {applyAlias}"
                 });
             }
         }
+
         //private string BuildQuery()
         //{
         //    return ((IQueryBuilder<T>)this).BuildQuery();
@@ -709,7 +705,7 @@ namespace EasyDapper
             return sb.ToString();
         }
         private string BuildWhereClause()
-        {            
+        {
             return _filters.Any() ? "WHERE " + string.Join(" AND ", _filters) : "";
         }
         private string BuildOrderByClause()
