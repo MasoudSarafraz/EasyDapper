@@ -25,3 +25,12 @@ var data = await executor.ExecuteMultiResultStoredProcedureAsync(
     ),
     new { Region = "North" }
 );
+
+//نمونه OuterApply
+var query = SQL.QueryBuilder<Person>()
+.InnerJoin<Person, Party>((x, p) => x.PARTY_ID == p.PartyId)
+.OuterApply<Party>(
+    (x, p) => x.PARTY_ID == p.PartyId,
+    subQuery => subQuery.Where(a => a.PartyId == 117))
+.Where(x => x.PARTY_ID == 117 && x.CurrentFirstName.Contains("م"))
+.Execute();

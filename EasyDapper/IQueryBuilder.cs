@@ -39,7 +39,7 @@ namespace EasyDapper
         IQueryBuilder<T> Intersect(IQueryBuilder<T> queryBuilder);
         IQueryBuilder<T> Except(IQueryBuilder<T> queryBuilder);
         // Explicit Method for BuildQuery
-        // به دلیل اینکه کلاس اینترنال هستش متد های outerapply و crossapply به مشکل میخوردند . بنابراین
+        // به دلیل اینکه کلاس اینترنال هستش متد های OuterApply و CrossApply به مشکل میخوردند . بنابراین
         string BuildQuery();
     }
 

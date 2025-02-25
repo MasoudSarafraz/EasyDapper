@@ -325,7 +325,7 @@ namespace EasyDapper
         public async Task<IEnumerable<T>> ExecuteStoredProcedureAsync<T>(string procedureName, object parameters = null, CancellationToken cancellationToken = default)
         {
             IsValidProcedureName(procedureName);
-            var openConnection = GetOpenConnection();
+            var openConnection = await GetOpenConnectionAsync();
             //await connection.OpenAsync(cancellationToken).ConfigureAwait(false);
             return await openConnection.QueryAsync<T>(
             new CommandDefinition(
@@ -355,7 +355,7 @@ namespace EasyDapper
         public async Task<T> ExecuteMultiResultStoredProcedureAsync<T>(string procedureName, Func<SqlMapper.GridReader, Task<T>> asyncMapper, object parameters = null, IDbTransaction transaction = null, int? commandTimeout = null, CancellationToken cancellationToken = default)
         {
             IsValidProcedureName(procedureName);
-            var openConnection = GetOpenConnection();
+            var openConnection = await GetOpenConnectionAsync();
             using (var multi = await openConnection.QueryMultipleAsync(
                 new CommandDefinition(
                     procedureName,
@@ -548,7 +548,7 @@ namespace EasyDapper
             }
             return parameters;
         }
-        private string BuildBatchInsertWithOutputQuery<T>()//در SQL 2016 به بعد ساپورت میشود
+        private string BuildBatchInsertWithOutputQuery<T>()//از متاسفانه SQL 2016 به بعد ساپورت میشود
         {
             return InsertQueryCache.GetOrAdd(typeof(T), type =>
             {
@@ -688,7 +688,7 @@ namespace EasyDapper
                 }
                 catch
                 {
-                    // خطاها در زمان Dispose چشم‌پوشی می‌شوند
+                    //Do Nothing
                 }
             }
             if (_lazyConnection?.IsValueCreated == true)
