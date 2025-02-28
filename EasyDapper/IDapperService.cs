@@ -13,8 +13,8 @@ namespace EasyDapper
         //IStoredProcedureExecutor<T> CreateStoredProcedureExecutor<T>();
         int Insert<T>(T entity) where T : class;
         Task<int> InsertAsync<T>(T entity) where T : class;
-        int InsertList<T>(IEnumerable<T> entities) where T : class;
-        Task<int> InsertListAsync<T>(IEnumerable<T> entities, CancellationToken cancellationToken = default) where T : class;
+        int InsertList<T>(IEnumerable<T> entities, bool generateIdentities = false) where T : class;
+        Task<int> InsertListAsync<T>(IEnumerable<T> entities, bool generateIdentities = false, CancellationToken cancellationToken = default) where T : class;
         int Update<T>(T entity) where T : class;
         Task<int> UpdateAsync<T>(T entity) where T : class;
         int UpdateList<T>(IEnumerable<T> entities) where T : class;

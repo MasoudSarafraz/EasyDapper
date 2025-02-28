@@ -14,6 +14,7 @@ using System.Threading;
 using System.Text.RegularExpressions;
 using System.Xml.Linq;
 using System.Collections;
+using System.Data.Common;
 
 
 namespace EasyDapper
@@ -150,19 +151,18 @@ namespace EasyDapper
             }
             return await connection.ExecuteAsync(query, entity, _transaction);
         }
-        public int InsertList<T>(IEnumerable<T> entities) where T : class
+        public int InsertList<T>(IEnumerable<T> entities, bool generateIdentities = false) where T : class
         {
             var entityList = entities.ToList();
             if (entityList.Count == 0) return 0;
             var connection = GetOpenConnection() as SqlConnection;
             var identityProp = GetIdentityProperty<T>();
-            int totalInserted = 0;
-            for (int i = 0; i < entityList.Count; i += BATCH_SIZE)
+            if (identityProp != null && generateIdentities)
             {
-                //var batch = entityList.Skip(i).Take(BATCH_SIZE).ToList();
-                var batch = entityList.GetRange(i, Math.Min(BATCH_SIZE, entityList.Count - i));
-                if (identityProp != null)
+                for (int i = 0; i < entityList.Count; i += BATCH_SIZE)
                 {
+                    //var batch = entityList.Skip(i).Take(BATCH_SIZE).ToList();
+                    var batch = entityList.GetRange(i, Math.Min(BATCH_SIZE, entityList.Count - i));
                     var query = BuildOptimizedBatchInsertQuery<T>(batch.Count);
                     var parameters = CreateOptimizedParameters(batch);
                     var generatedIds = connection.Query<int>(query, parameters, _transaction, commandTimeout: _timeOut).ToList();
@@ -171,27 +171,27 @@ namespace EasyDapper
                         identityProp.SetValue(batch[j], generatedIds[j]);
                     });
                 }
-                else
-                {
-                    var simpleQuery = BulkInsertQueryCache.GetOrAdd(typeof(T), BuildSimpleInsertQuery<T>);
-                    totalInserted += connection.Execute(simpleQuery, batch, _transaction, _timeOut);
-                }
+            }
+            else
+            {
+                InsertBulkCopy(entities);
+                //var simpleQuery = BulkInsertQueryCache.GetOrAdd(typeof(T), BuildSimpleInsertQuery<T>);
+                //totalInserted += connection.Execute(simpleQuery, batch, _transaction, _timeOut);
             }
             return entityList.Count;
         }
-        public async Task<int> InsertListAsync<T>(IEnumerable<T> entities, CancellationToken cancellationToken = default) where T : class
+        public async Task<int> InsertListAsync<T>(IEnumerable<T> entities, bool generateIdentities = false, CancellationToken cancellationToken = default) where T : class
         {
             var entityList = entities.ToList();
             if (entityList.Count == 0) return 0;
             var connection = await GetOpenConnectionAsync();
             var identityProp = GetIdentityProperty<T>();
-            int totalInserted = 0;
-            for (int i = 0; i < entityList.Count; i += BATCH_SIZE)
+            if (identityProp != null && generateIdentities)
             {
-                //var batch = entityList.Skip(i).Take(BATCH_SIZE).ToList();
-                var batch = entityList.GetRange(i, Math.Min(BATCH_SIZE, entityList.Count - i));
-                if (identityProp != null)
+                for (int i = 0; i < entityList.Count; i += BATCH_SIZE)
                 {
+                    //var batch = entityList.Skip(i).Take(BATCH_SIZE).ToList();
+                    var batch = entityList.GetRange(i, Math.Min(BATCH_SIZE, entityList.Count - i));
                     var query = BuildOptimizedBatchInsertQuery<T>(batch.Count);
                     var parameters = await CreateParametersAsync(batch);
                     var commandDefinition = new CommandDefinition(
@@ -207,18 +207,19 @@ namespace EasyDapper
                         identityProp.SetValue(entityList[j], generatedIds[j]);
                     }
                 }
-                else
-                {
-                    var simpleQuery = BulkInsertQueryCache.GetOrAdd(typeof(T), BuildSimpleInsertQuery<T>);
-                    var commandDefinition = new CommandDefinition(
-                        commandText: simpleQuery,
-                        parameters: batch,
-                        transaction: _transaction,
-                        commandTimeout: _timeOut,
-                        cancellationToken: cancellationToken
-                    );
-                    totalInserted += await connection.ExecuteAsync(commandDefinition);
-                }
+            }
+            else
+            {
+                await InsertBulkCopyAsync(entities, cancellationToken);
+                //var simpleQuery = BulkInsertQueryCache.GetOrAdd(typeof(T), BuildSimpleInsertQuery<T>);
+                //var commandDefinition = new CommandDefinition(
+                //    commandText: simpleQuery,
+                //    parameters: batch,
+                //    transaction: _transaction,
+                //    commandTimeout: _timeOut,
+                //    cancellationToken: cancellationToken
+                //);
+                //totalInserted += await connection.ExecuteAsync(commandDefinition);
             }
             return entityList.Count;
         }
@@ -700,6 +701,103 @@ namespace EasyDapper
                 command.CommandText = commandText;
                 command.ExecuteNonQuery();
             }
+        }
+        private void ExecuteRawCommand(string commandText)
+        {
+            using (var command = GetOpenConnection().CreateCommand())
+            {
+                command.Transaction = _transaction;
+                command.CommandText = commandText;
+                command.ExecuteNonQuery();
+            }
+        }
+        private void InsertBulkCopy<T>(IEnumerable<T> entities) where T : class
+        {
+            var tableName = GetTableName<T>();
+            var properties = GetInsertProperties<T>().ToList();
+            var dataTable = ToDataTable(entities, properties);
+            using (var reader = ConvertToDbDataReader(dataTable))
+            {
+                using (var bulkCopy = new SqlBulkCopy((SqlConnection)GetOpenConnection(), SqlBulkCopyOptions.Default, (SqlTransaction)_transaction))
+                {
+                    bulkCopy.DestinationTableName = tableName;
+                    bulkCopy.WriteToServer(reader);
+                }
+            }
+        }
+        private async Task InsertBulkCopyAsync<T>(IEnumerable<T> entities, CancellationToken cancellationToken = default) where T : class
+        {
+            var tableName = GetTableName<T>();
+            var properties = GetInsertProperties<T>().ToList();
+            var dataTable = ToDataTable(entities, properties);
+            using (var reader = ConvertToDbDataReader(dataTable))
+            {
+                using (var bulkCopy = new SqlBulkCopy((SqlConnection)GetOpenConnection(), SqlBulkCopyOptions.Default, (SqlTransaction)_transaction))
+                {
+                    bulkCopy.DestinationTableName = tableName;
+                    await bulkCopy.WriteToServerAsync(reader, cancellationToken);
+                }
+            }
+        }
+        private List<int> InsertBulkCopyWithIdentity<T>(IEnumerable<T> entities) where T : class//در اتصال کلید ها به موجودیت ها مشکل وجود داره، به همین دلیل فعلا استفاده نکردم
+        {
+            var random = new Random().Next(10, 100000000);
+            var tableName = GetTableName<T>();
+            var tempTableName = $"##Temp_{random}";
+            var identityProp = GetIdentityProperty<T>();
+            var properties = GetInsertProperties<T>().ToList();
+            var connection = (SqlConnection)GetOpenConnection();
+            var identities = new List<int>();
+            try
+            {
+                var createTempTableQuery = $@"SELECT TOP 0 {string.Join(", ", properties.Select(GetColumnName))} INTO {tempTableName} FROM {tableName};";
+                ExecuteRawCommand(createTempTableQuery);
+                using (var bulkCopy = new SqlBulkCopy(connection, SqlBulkCopyOptions.Default, (SqlTransaction)_transaction))
+                {
+                    bulkCopy.DestinationTableName = tempTableName;
+                    var dataTable = ToDataTable(entities, properties);
+                    var DbDataReader = ConvertToDbDataReader(dataTable);
+                    bulkCopy.WriteToServer(DbDataReader);
+                }
+                var insertAndRetrieveQuery = $@"
+                    INSERT INTO {tableName} ({string.Join(", ", properties.Select(p => GetColumnName(p)))})
+                    OUTPUT INSERTED.{GetColumnName(identityProp)}
+                    SELECT {string.Join(", ", properties.Select(GetColumnName))}
+                    FROM {tempTableName}";
+                identities = connection.Query<int>(insertAndRetrieveQuery, transaction: _transaction).ToList();
+                ExecuteRawCommand($"DROP TABLE {tempTableName}");
+            }
+            catch (Exception ex)
+            {
+                throw new InvalidOperationException("Bulk copy with identity retrieval failed.", ex);
+            }
+            identities.Sort();
+            return identities;
+        }
+        private DataTable ToDataTable<T>(IEnumerable<T> entities, IEnumerable<PropertyInfo> properties) where T : class
+        {
+            var dataTable = new DataTable();
+            foreach (var property in properties)
+            {
+                var columnName = GetColumnName(property);
+                dataTable.Columns.Add(columnName, Nullable.GetUnderlyingType(property.PropertyType) ?? property.PropertyType);
+            }
+            foreach (var entity in entities)
+            {
+                var row = dataTable.NewRow();
+                foreach (var property in properties)
+                {
+                    var columnName = GetColumnName(property);
+                    row[columnName] = property.GetValue(entity) ?? DBNull.Value;
+                }
+                dataTable.Rows.Add(row);
+            }
+            return dataTable;
+        }
+
+        private DbDataReader ConvertToDbDataReader(DataTable dataTable)
+        {
+            return dataTable.CreateDataReader();
         }
         private void CleanupTransaction()
         {
