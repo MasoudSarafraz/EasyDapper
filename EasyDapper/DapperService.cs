@@ -54,7 +54,7 @@ namespace EasyDapper
             else
             {
                 var savePointName = $"SavePoint{_transactionCount}";
-                ExecuteCommand($"SAVE TRANSACTION {savePointName}");
+                ExecuteTransactionCommand($"SAVE TRANSACTION {savePointName}");
                 _savePoints.Push(savePointName);
             }
             _transactionCount++;
@@ -93,7 +93,7 @@ namespace EasyDapper
                     if (_savePoints.Count > 0)
                     {
                         var savePointName = _savePoints.Pop();
-                        ExecuteCommand($"ROLLBACK TRANSACTION {savePointName}");
+                        ExecuteTransactionCommand($"ROLLBACK TRANSACTION {savePointName}");
                     }
                     else
                     {
@@ -693,7 +693,7 @@ namespace EasyDapper
                 return parameters;
             });
         }
-        private void ExecuteCommand(string commandText)
+        private void ExecuteTransactionCommand(string commandText)
         {
             using (var command = _transaction.Connection.CreateCommand())
             {
