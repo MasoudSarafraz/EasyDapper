@@ -128,11 +128,10 @@ namespace EasyDapper
             var connection = GetOpenConnection();
             var query = InsertQueryCache.GetOrAdd(typeof(T), BuildInsertQuery<T>);
             var identityProp = GetIdentityProperty<T>();
-
             if (identityProp != null)
             {
-                var newId = connection.ExecuteScalar<int>(query, entity, _transaction, _timeOut);
-                identityProp.SetValue(entity, newId);
+                var newId = connection.ExecuteScalar(query, entity, _transaction, _timeOut);
+                identityProp.SetValue(entity, Convert.ChangeType(newId, identityProp.PropertyType));
                 return 1;
             }
             return connection.Execute(query, entity, _transaction);
@@ -142,11 +141,10 @@ namespace EasyDapper
             var connection = await GetOpenConnectionAsync();
             var query = InsertQueryCache.GetOrAdd(typeof(T), BuildInsertQuery<T>);
             var identityProp = GetIdentityProperty<T>();
-
             if (identityProp != null)
             {
-                var newId = await connection.ExecuteScalarAsync<int>(query, entity, _transaction, _timeOut);
-                identityProp.SetValue(entity, newId);
+                var newId = await connection.ExecuteScalarAsync(query, entity, _transaction, _timeOut);
+                identityProp.SetValue(entity, Convert.ChangeType(newId, identityProp.PropertyType));
                 return 1;
             }
             return await connection.ExecuteAsync(query, entity, _transaction);
@@ -165,11 +163,22 @@ namespace EasyDapper
                     var batch = entityList.GetRange(i, Math.Min(BATCH_SIZE, entityList.Count - i));
                     var query = BuildOptimizedBatchInsertQuery<T>(batch.Count);
                     var parameters = CreateOptimizedParameters(batch);
-                    var generatedIds = connection.Query<int>(query, parameters, _transaction, commandTimeout: _timeOut).ToList();
-                    Parallel.For(0, batch.Count, j =>
+                    if (identityProp.PropertyType == typeof(int))
                     {
-                        identityProp.SetValue(batch[j], generatedIds[j]);
-                    });
+                        var generatedIds = connection.Query<int>(query, parameters, _transaction, commandTimeout: _timeOut).ToList();
+                        Parallel.For(0, batch.Count, j =>
+                        {
+                            identityProp.SetValue(batch[j], generatedIds[j]);
+                        });
+                    }
+                    if (identityProp.PropertyType == typeof(long))
+                    {
+                        var generatedIds = connection.Query<long>(query, parameters, _transaction, commandTimeout: _timeOut).ToList();
+                        Parallel.For(0, batch.Count, j =>
+                        {
+                            identityProp.SetValue(batch[j], generatedIds[j]);
+                        });
+                    }
                 }
             }
             else
@@ -201,10 +210,21 @@ namespace EasyDapper
                         commandTimeout: _timeOut,
                         cancellationToken: cancellationToken
                     );
-                    var generatedIds = (await connection.QueryAsync<int>(commandDefinition)).ToList();
-                    for (int j = 0; j < batch.Count; j++)
+                    if (identityProp.PropertyType == typeof(int))
                     {
-                        identityProp.SetValue(entityList[j], generatedIds[j]);
+                        var generatedIds = (await connection.QueryAsync<int>(commandDefinition)).ToList();
+                        for (int j = 0; j < batch.Count; j++)
+                        {
+                            identityProp.SetValue(entityList[j], generatedIds[j]);
+                        }
+                    }
+                    if (identityProp.PropertyType == typeof(long))
+                    {
+                        var generatedIds = (await connection.QueryAsync<long>(commandDefinition)).ToList();
+                        for (int j = 0; j < batch.Count; j++)
+                        {
+                            identityProp.SetValue(entityList[j], generatedIds[j]);
+                        }
                     }
                 }
             }
