@@ -622,15 +622,23 @@ namespace EasyDapper
         {
             return expression is ConstantExpression constant && constant.Value == null;
         }
+        //private string GetTableName(Type type)
+        //{
+        //    var table = type.GetCustomAttribute<TableAttribute>();
+        //    var schema = table?.Schema;
+        //    var name = table?.TableName ?? type.Name;
+        //    return schema != null
+        //        ? "[" + Escape(schema) + "].[" + Escape(name) + "]"
+        //        : "[" + Escape(name) + "]";
+        //}
         private string GetTableName(Type type)
         {
             var table = type.GetCustomAttribute<TableAttribute>();
-            var schema = table?.Schema;
-            var name = table?.TableName ?? type.Name;
-            return schema != null
-                ? "[" + Escape(schema) + "].[" + Escape(name) + "]"
-                : "[" + Escape(name) + "]";
+            var name = Escape(table?.TableName ?? type.Name);
+            var schema = string.IsNullOrEmpty(table?.Schema) ? null : Escape(table.Schema);
+            return schema != null ? $"[{schema}].[{name}]" : $"[dbo].[{name}]";
         }
+
         private string GetColumnName(PropertyInfo property)
         {
             var column = property.GetCustomAttribute<ColumnAttribute>();

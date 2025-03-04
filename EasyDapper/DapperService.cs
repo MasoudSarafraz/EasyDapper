@@ -421,7 +421,7 @@ namespace EasyDapper
         {
             var tableAttr = typeof(T).GetCustomAttribute<TableAttribute>();
             return tableAttr == null
-                ? $"[{typeof(T).Name}]"
+                ? $"[dbo].[{typeof(T).Name}]"
                 : $"[{tableAttr.Schema}].[{tableAttr.TableName}]";
         }
         private string GetColumnName(PropertyInfo property)
