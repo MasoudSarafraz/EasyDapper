@@ -8,12 +8,9 @@ using Dapper;
 using EasyDapper.Attributes;
 using System.Collections.Generic;
 using System.Collections.Concurrent;
-using System.Data.SqlTypes;
 using System.Text;
 using System.Threading;
 using System.Text.RegularExpressions;
-using System.Xml.Linq;
-using System.Collections;
 using System.Data.Common;
 
 
