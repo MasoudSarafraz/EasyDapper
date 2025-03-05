@@ -30,6 +30,7 @@ namespace EasyDapper
         private static readonly ConcurrentDictionary<Type, string> BulkInsertQueryCache = new ConcurrentDictionary<Type, string>();
         private int BATCH_SIZE = 100;
         private int _timeOut;
+        private string defualtSchema = "dbo";
         public int TransactionCount() => _transactionCount;
         public DapperService(string connectionString)
         {
@@ -421,8 +422,8 @@ namespace EasyDapper
         {
             var tableAttr = typeof(T).GetCustomAttribute<TableAttribute>();
             return tableAttr == null
-                ? $"[dbo].[{typeof(T).Name}]"
-                : $"[{tableAttr.Schema}].[{tableAttr.TableName}]";
+                ? $"[{this.defualtSchema}].[{typeof(T).Name}]"
+                : $"[{tableAttr.Schema ?? this.defualtSchema}].[{tableAttr.TableName}]";
         }
         private string GetColumnName(PropertyInfo property)
         {

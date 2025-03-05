@@ -34,6 +34,7 @@ namespace EasyDapper
         private string _intersectClause = string.Empty;
         private string _exceptClause = string.Empty;
         private int _joinCounter = 0;
+        private string defualtSchema = "dbo";
         //internal QueryBuilder(string connectionString)
         //{
         //    if (string.IsNullOrEmpty(connectionString))
@@ -633,10 +634,14 @@ namespace EasyDapper
         //}
         private string GetTableName(Type type)
         {
-            var table = type.GetCustomAttribute<TableAttribute>();
-            var name = Escape(table?.TableName ?? type.Name);
-            var schema = string.IsNullOrEmpty(table?.Schema) ? null : Escape(table.Schema);
-            return schema != null ? $"[{schema}].[{name}]" : $"[dbo].[{name}]";
+            //var table = type.GetCustomAttribute<TableAttribute>();
+            //var name = Escape(table?.TableName ?? type.Name);
+            //var schema = string.IsNullOrEmpty(table?.Schema) ? null : Escape(table.Schema);
+            //return schema != null ? $"[{schema}].[{name}]" : $"[dbo].[{name}]";
+            var tableAttr = type.GetCustomAttribute<TableAttribute>();
+            return tableAttr == null
+                ? $"[{this.defualtSchema}].[{type.Name}]"
+                : $"[{tableAttr.Schema ?? this.defualtSchema}].[{tableAttr.TableName}]";
         }
 
         private string GetColumnName(PropertyInfo property)
