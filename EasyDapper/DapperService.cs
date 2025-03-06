@@ -28,6 +28,8 @@ namespace EasyDapper
         private static readonly ConcurrentDictionary<Type, string> DeleteQueryCache = new ConcurrentDictionary<Type, string>();
         private static readonly ConcurrentDictionary<Type, string> GetByIdQueryCache = new ConcurrentDictionary<Type, string>();
         private static readonly ConcurrentDictionary<Type, string> BulkInsertQueryCache = new ConcurrentDictionary<Type, string>();
+        private readonly ConcurrentDictionary<Type, List<PropertyInfo>> _primaryKeyCache = new ConcurrentDictionary<Type, List<PropertyInfo>>();
+        private readonly ConcurrentDictionary<object, object> _attachedEntities = new ConcurrentDictionary<object, object>();
         private int BATCH_SIZE = 100;
         private int _timeOut;
         private string defualtSchema = "dbo";
@@ -241,17 +243,54 @@ namespace EasyDapper
             }
             return entityList.Count;
         }
+        //public int Update<T>(T entity) where T : class
+        //{
+        //    var connection = GetOpenConnection();
+        //    var query = UpdateQueryCache.GetOrAdd(typeof(T), BuildUpdateQuery<T>);
+        //    return connection.Execute(query, entity, _transaction, _timeOut);
+        //}
         public int Update<T>(T entity) where T : class
         {
+            var primaryKeys = GetPrimaryKeyProperties<T>().ToList();
+            var key = CreateCompositeKey(entity, primaryKeys);
+            // اگر موجودیت Attach نشده بود از آپدیت عادی استفاده کن
+            if (!_attachedEntities.TryGetValue(key, out var original))
+            {
+                return BaseUpdate(entity); // یا کوئری آپدیت کامل
+            }
+            var changedProps = GetChangedProperties((T)original, entity);
+            if (!changedProps.Any())
+            {
+                return 0;
+            }
+            var query = BuildDynamicUpdateQuery<T>(changedProps, primaryKeys);
+            var parameters = BuildParameters(entity, primaryKeys, changedProps);
             var connection = GetOpenConnection();
-            var query = UpdateQueryCache.GetOrAdd(typeof(T), BuildUpdateQuery<T>);
-            return connection.Execute(query, entity, _transaction, _timeOut);
+            return connection.Execute(query, parameters, _transaction, _timeOut);
         }
+        //public async Task<int> UpdateAsync<T>(T entity) where T : class
+        //{
+        //    var connection = await GetOpenConnectionAsync();
+        //    var query = UpdateQueryCache.GetOrAdd(typeof(T), BuildUpdateQuery<T>);
+        //    return await connection.ExecuteAsync(query, entity, _transaction, _timeOut);
+        //}
         public async Task<int> UpdateAsync<T>(T entity) where T : class
         {
+            var primaryKeys = GetPrimaryKeyProperties<T>().ToList();
+            var key = CreateCompositeKey(entity, primaryKeys);
+            if (!_attachedEntities.TryGetValue(key, out var original))
+            {
+                return await BaseUpdateAsync(entity);
+            }
+            var changedProps = GetChangedProperties((T)original, entity);
+            if (!changedProps.Any())
+            {
+                return 0;
+            }
+            var query = BuildDynamicUpdateQuery<T>(changedProps, primaryKeys);
+            var parameters = BuildParameters(entity, primaryKeys, changedProps);
             var connection = await GetOpenConnectionAsync();
-            var query = UpdateQueryCache.GetOrAdd(typeof(T), BuildUpdateQuery<T>);
-            return await connection.ExecuteAsync(query, entity, _transaction, _timeOut);
+            return await connection.ExecuteAsync(query, parameters, _transaction, _timeOut);
         }
         public int UpdateList<T>(IEnumerable<T> entities) where T : class
         {
@@ -418,6 +457,30 @@ namespace EasyDapper
                 return await asyncMapper(multi).ConfigureAwait(false);
             }
         }
+        public void Attach<T>(T entity) where T : class
+        {
+            var primaryKeys = GetPrimaryKeyProperties<T>().ToList();
+            var key = CreateCompositeKey(entity, primaryKeys);
+            if (!_attachedEntities.ContainsKey(key))
+            {
+                var clone = CloneEntity(entity);
+                _attachedEntities.TryAdd(key, clone);
+            }
+        }
+        public void Detach<T>(T entity) where T : class
+        {
+            var primaryKeys = GetPrimaryKeyProperties<T>().ToList();
+            var key = CreateCompositeKey(entity, primaryKeys);
+            _attachedEntities.TryRemove(key, out _);
+        }
+        private object CreateCompositeKey<T>(T entity, List<PropertyInfo> primaryKeys)
+        {
+            if (primaryKeys.Count == 1)
+            {
+                return primaryKeys[0].GetValue(entity);
+            }                
+            return primaryKeys.Select(p => p.GetValue(entity)).ToArray();
+        }
         private string GetTableName<T>()
         {
             var tableAttr = typeof(T).GetCustomAttribute<TableAttribute>();
@@ -434,17 +497,97 @@ namespace EasyDapper
         }
         private IEnumerable<PropertyInfo> GetPrimaryKeyProperties<T>()
         {
-            var properties = typeof(T).GetProperties().Where(p => p.GetCustomAttribute<PrimaryKeyAttribute>() != null).ToList();
-            if (properties.Count == 0)
+            //var properties = typeof(T).GetProperties().Where(p => p.GetCustomAttribute<PrimaryKeyAttribute>() != null).ToList();
+            //if (properties.Count == 0)
+            //{
+            //    throw new InvalidOperationException($"No primary key defined for type {typeof(T).Name}");
+            //}
+            //var identityPk = properties.Count(p => p.GetCustomAttribute<IdentityAttribute>() != null);
+            //if (identityPk > 1)
+            //{
+            //    throw new InvalidOperationException("Multiple Identity primary keys are not supported");
+            //}
+            //return properties;
+            return _primaryKeyCache.GetOrAdd(typeof(T), type =>
             {
-                throw new InvalidOperationException($"No primary key defined for type {typeof(T).Name}");
-            }
-            var identityPk = properties.Count(p => p.GetCustomAttribute<IdentityAttribute>() != null);
-            if (identityPk > 1)
+                var properties = typeof(T).GetProperties()
+                    .Where(p => p.GetCustomAttribute<PrimaryKeyAttribute>() != null)
+                    .ToList();
+                if (properties.Count == 0)
+                {
+                    throw new InvalidOperationException($"No primary key defined for {typeof(T).Name}");
+                }
+                var identityPk = properties.Count(p => p.GetCustomAttribute<IdentityAttribute>() != null);
+                if (identityPk > 1)
+                {
+                    throw new InvalidOperationException("Multiple Identity primary keys are not supported");
+                }
+                return properties;
+            });
+        }
+        private List<string> GetChangedProperties<T>(T original, T current)
+        {
+            return typeof(T).GetProperties()
+                .Where(p => !IsPrimaryKey(p) && !object.Equals(p.GetValue(original), p.GetValue(current)))
+                .Select(p => p.Name)
+                .ToList();
+        }
+
+        private string BuildDynamicUpdateQuery<T>(List<string> changedProps, List<PropertyInfo> primaryKeys)
+        {
+            var tableName = GetTableName<T>();
+            var changedProperties = changedProps
+                .Select(p => typeof(T).GetProperty(p))
+                .Where(p => p != null)
+                .ToList();
+            var setClause = string.Join(", ", changedProperties.Select(p => $"{GetColumnName(p)} = @{p.Name}"));
+            var whereClause = string.Join(" AND ", primaryKeys.Select(p => $"{GetColumnName(p)} = @pk_{p.Name}"));
+            return $"UPDATE {tableName} SET {setClause} WHERE {whereClause}";
+        }
+
+        private DynamicParameters BuildParameters<T>(T entity, List<PropertyInfo> primaryKeys, List<string> changedProps)
+        {
+            var parameters = new DynamicParameters();
+            foreach (var pk in primaryKeys)
             {
-                throw new InvalidOperationException("Multiple Identity primary keys are not supported");
+                parameters.Add($"pk_{pk.Name}", pk.GetValue(entity));
             }
-            return properties;
+            foreach (var prop in changedProps.Select(p => typeof(T).GetProperty(p)))
+            {
+                parameters.Add(prop.Name, prop.GetValue(entity));
+            }
+            return parameters;
+        }
+        private T CloneEntity<T>(T entity)
+        {
+            var clone = Activator.CreateInstance<T>();
+            foreach (var prop in typeof(T).GetProperties().Where(p => p.CanWrite))
+            {
+                var value = prop.GetValue(entity);
+                // کلون کردن اشیا پیچیده
+                if (value != null && !prop.PropertyType.IsValueType && prop.PropertyType != typeof(string))
+                {
+                    var cloneMethod = prop.PropertyType.GetMethod("MemberwiseClone", BindingFlags.NonPublic | BindingFlags.Instance);
+                    if (cloneMethod != null)
+                    {
+                        value = cloneMethod.Invoke(value, null);
+                    }
+                }
+                prop.SetValue(clone, value);
+            }
+            return clone;
+        }
+        private int BaseUpdate<T>(T entity) where T : class
+        {
+            var connection = GetOpenConnection();
+            var query = UpdateQueryCache.GetOrAdd(typeof(T), BuildUpdateQuery<T>);
+            return connection.Execute(query, entity, _transaction, _timeOut);
+        }
+        private async Task<int> BaseUpdateAsync<T>(T entity) where T : class
+        {
+            var connection = await GetOpenConnectionAsync();
+            var query = UpdateQueryCache.GetOrAdd(typeof(T), BuildUpdateQuery<T>);
+            return await connection.ExecuteAsync(query, entity, _transaction, _timeOut);
         }
         private bool IsPrimaryKey(PropertyInfo property) => property.GetCustomAttribute<PrimaryKeyAttribute>() != null;
         private IEnumerable<PropertyInfo> GetInsertProperties<T>()
