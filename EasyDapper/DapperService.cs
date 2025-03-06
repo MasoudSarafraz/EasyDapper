@@ -253,7 +253,7 @@ namespace EasyDapper
         {
             var primaryKeys = GetPrimaryKeyProperties<T>().ToList();
             var key = CreateCompositeKey(entity, primaryKeys);
-            // اگر موجودیت Attach نشده بود از آپدیت عادی استفاده کن
+            // اگر موجودیت Attach نشده بود از آپدیت عادی استفاده میکنیم
             if (!_attachedEntities.TryGetValue(key, out var original))
             {
                 return BaseUpdate(entity); // یا کوئری آپدیت کامل
