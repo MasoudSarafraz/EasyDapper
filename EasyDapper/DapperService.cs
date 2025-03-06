@@ -532,7 +532,6 @@ namespace EasyDapper
                 .Select(p => p.Name)
                 .ToList();
         }
-
         private string BuildDynamicUpdateQuery<T>(List<string> changedProps, List<PropertyInfo> primaryKeys)
         {
             var tableName = GetTableName<T>();
@@ -544,7 +543,6 @@ namespace EasyDapper
             var whereClause = string.Join(" AND ", primaryKeys.Select(p => $"{GetColumnName(p)} = @pk_{p.Name}"));
             return $"UPDATE {tableName} SET {setClause} WHERE {whereClause}";
         }
-
         private DynamicParameters BuildParameters<T>(T entity, List<PropertyInfo> primaryKeys, List<string> changedProps)
         {
             var parameters = new DynamicParameters();
@@ -955,7 +953,6 @@ namespace EasyDapper
             }
             return dataTable;
         }
-
         private DbDataReader ConvertToDbDataReader(DataTable dataTable)
         {
             return dataTable.CreateDataReader();
