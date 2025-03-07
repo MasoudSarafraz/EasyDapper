@@ -34,3 +34,29 @@ var query = SQL.QueryBuilder<Person>()
     subQuery => subQuery.Where(a => a.PartyId == 117))
 .Where(x => x.PARTY_ID == 117 && x.CurrentFirstName.Contains("م"))
 .Execute();
+
+// استفاده از تابع اسکالر
+var result = await repository.ExecuteScalarFunctionAsync<int>(
+    "CalculateSum", 
+    new { Num1 = 5, Num2 = 10 }
+);
+
+// استفاده از توابع جدولی
+var result = await executor.ExecuteTableFunctionAsync<User>(
+    "GetActiveUsers",
+    new {
+        MinAge = 18,
+        MaxSalary = 5000.00m,
+        IsActive = true,
+        JoinDate = DateTime.Now.AddYears(-1)
+    }
+);
+
+// نمونه بدون پارامتر
+var allItems = await executor.ExecuteTableFunctionAsync<Item>("GetAllItems");
+
+//توابع اسکالر
+var balance = await executor.ExecuteScalarFunctionAsync<double>(
+    "GetUserAccountBalance",
+    new { UserId = 123, Currency = "USD" }
+);
