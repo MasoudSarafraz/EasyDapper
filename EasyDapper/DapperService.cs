@@ -12,6 +12,7 @@ using System.Text;
 using System.Threading;
 using System.Text.RegularExpressions;
 using System.Data.Common;
+using System.Collections;
 
 
 namespace EasyDapper
@@ -476,11 +477,10 @@ namespace EasyDapper
         public T ExecuteScalarFunction<T>(string functionName, object parameters = null)
         {
             var connection = GetOpenConnection();
-            var dynamicParams = ConvertToDynamicParameters(parameters);
-            var query = BuildScalarFunctionQuery(functionName, dynamicParams);
+            var query = BuildScalarFunctionQuery(functionName, parameters);
             var commandDefinition = new CommandDefinition(
                 commandText: query,
-                parameters: dynamicParams,
+                parameters: parameters,
                 transaction: _transaction,
                 commandTimeout: _timeOut
             );
@@ -489,11 +489,10 @@ namespace EasyDapper
         public async Task<T> ExecuteScalarFunctionAsync<T>(string functionName, object parameters = null, CancellationToken cancellationToken = default)
         {
             var connection = await GetOpenConnectionAsync();
-            var dynamicParams = ConvertToDynamicParameters(parameters);
-            var query = BuildScalarFunctionQuery(functionName, dynamicParams);
+            var query = BuildScalarFunctionQuery(functionName, parameters);
             var commandDefinition = new CommandDefinition(
                 commandText: query,
-                parameters: dynamicParams,
+                parameters: parameters,
                 transaction: _transaction,
                 commandTimeout: _timeOut,
                 cancellationToken: cancellationToken
@@ -503,11 +502,10 @@ namespace EasyDapper
         public IEnumerable<T> ExecuteTableFunction<T>(string functionName, object parameters)
         {
             var connection = GetOpenConnection();
-            var dynamicParams = ConvertToDynamicParameters(parameters);
-            var query = BuildTableFunctionQuery(functionName, dynamicParams);
+            var query = BuildTableFunctionQuery(functionName, parameters);
             var commandDefinition = new CommandDefinition(
                 commandText: query,
-                parameters: dynamicParams,
+                parameters: parameters,
                 transaction: _transaction,
                 commandTimeout: _timeOut
             );
@@ -516,11 +514,10 @@ namespace EasyDapper
         public async Task<IEnumerable<T>> ExecuteTableFunctionAsync<T>(string functionName, object parameters, CancellationToken cancellationToken = default)
         {
             var connection = await GetOpenConnectionAsync();
-            var dynamicParams = ConvertToDynamicParameters(parameters);
-            var query = BuildTableFunctionQuery(functionName, dynamicParams);
+            var query = BuildTableFunctionQuery(functionName, parameters);
             var commandDefinition = new CommandDefinition(
                 commandText: query,
-                parameters: dynamicParams,
+                parameters: parameters,
                 transaction: _transaction,
                 commandTimeout: _timeOut,
                 cancellationToken: cancellationToken
@@ -1011,140 +1008,18 @@ namespace EasyDapper
         {
             return dataTable.CreateDataReader();
         }
-        private DynamicParameters ConvertToDynamicParameters(object parameters)
+        private string BuildTableFunctionQuery(string functionName, object parameters)
         {
-            var dynamicParams = new DynamicParameters();
-            if (parameters == null) return dynamicParams;
-            var properties = parameters.GetType().GetProperties();
-            foreach (var prop in properties)
-            {
-                dynamicParams.Add(
-                    name: prop.Name,
-                    value: prop.GetValue(parameters),
-                    dbType: InferDbType(prop.PropertyType),
-                    direction: ParameterDirection.Input
-                );
-            }
-            return dynamicParams;
+            return $"SELECT * FROM {functionName}({BuildParameters(parameters)})";
         }
-        private string BuildTableFunctionQuery(string functionName, DynamicParameters parameters)
+        private string BuildScalarFunctionQuery(string functionName, object parameters)
         {
-            var paramList = string.Join(", ", parameters.ParameterNames.Select(p => $"@{p}::{GetTypeCast(parameters, p)}"));
-            return $"SELECT * FROM dbo.{functionName}({paramList})";
+            return $"SELECT {functionName}({BuildParameters(parameters)})";
         }
-        private string BuildScalarFunctionQuery(string functionName, DynamicParameters parameters)
+        private string BuildParameters(object parameters)
         {
-            var paramList = string.Join(", ", parameters.ParameterNames.Select(p => $"@{p}::{GetTypeCast(parameters, p)}"));
-            return $"SELECT dbo.{functionName}({paramList})";
-        }
-        private string GetTypeCast(DynamicParameters parameters, string paramName)
-        {
-            var dbType = parameters.Get<DbType?>(paramName);
-            switch (dbType)
-            {
-                case DbType.String:
-                case DbType.StringFixedLength:
-                    return "NVARCHAR(MAX)";
-                case DbType.AnsiString:
-                case DbType.AnsiStringFixedLength:
-                    return "VARCHAR(MAX)";
-                case DbType.Int32:
-                    return "INT";
-                case DbType.Int64:
-                    return "BIGINT";
-                case DbType.Int16:
-                    return "SMALLINT";
-                case DbType.Byte:
-                    return "TINYINT";
-                case DbType.Boolean:
-                    return "BIT";
-                case DbType.DateTime:
-                    return "DATETIME";
-                case DbType.DateTime2:
-                    return "DATETIME2";
-                case DbType.DateTimeOffset:
-                    return "DATETIMEOFFSET";
-                case DbType.Decimal:
-                    return "DECIMAL(18,6)";
-                case DbType.Double:
-                    return "FLOAT";
-                case DbType.Single:
-                    return "REAL";
-                case DbType.Guid:
-                    return "UNIQUEIDENTIFIER";
-                case DbType.Binary:
-                    return "VARBINARY(MAX)";
-                case DbType.Currency:
-                    return "MONEY";
-                case DbType.Xml:
-                    return "XML";
-                case DbType.Time:
-                    return "TIME";
-                case DbType.Date:
-                    return "DATE";
-                case DbType.SByte:
-                    return "SMALLINT";
-                case DbType.UInt16:
-                    return "INT";
-                case DbType.UInt32:
-                    return "BIGINT";
-                case DbType.UInt64:
-                    return "NUMERIC(20,0)";
-                case DbType.VarNumeric:
-                    return "NUMERIC";
-                default:
-                    return "SQL_VARIANT";
-            }
-        }
-        private DbType InferDbType(Type type)
-        {
-            if (type.IsEnum)
-            {
-                return InferDbType(Enum.GetUnderlyingType(type));
-            }
-            switch (Type.GetTypeCode(type))
-            {
-                case TypeCode.String:
-                    return DbType.String;
-                case TypeCode.Int32:
-                    return DbType.Int32;
-                case TypeCode.Int64:
-                    return DbType.Int64;
-                case TypeCode.Int16:
-                    return DbType.Int16;
-                case TypeCode.Byte:
-                    return DbType.Byte;
-                case TypeCode.Boolean:
-                    return DbType.Boolean;
-                case TypeCode.DateTime:
-                    return DbType.DateTime2;
-                case TypeCode.Decimal:
-                    return DbType.Decimal;
-                case TypeCode.Double:
-                    return DbType.Double;
-                case TypeCode.Single:
-                    return DbType.Single;
-                case TypeCode.Char:
-                    return DbType.AnsiStringFixedLength;
-                case TypeCode.SByte:
-                    return DbType.SByte;
-                case TypeCode.UInt16:
-                    return DbType.UInt16;
-                case TypeCode.UInt32:
-                    return DbType.UInt32;
-                case TypeCode.UInt64:
-                    return DbType.UInt64;
-                default:
-                    if (type == typeof(Guid))
-                        return DbType.Guid;
-                    if (type == typeof(DateTimeOffset))
-                        return DbType.DateTimeOffset;
-                    if (type == typeof(TimeSpan))
-                        return DbType.Time;
-                    if (type == typeof(byte[]))
-                        return DbType.Binary;
-                    return DbType.Object;
-            }
+            if (parameters == null) return "";
+            return string.Join(", ", parameters.GetType().GetProperties().Select(p => $"@{p.Name}"));
         }
         private void CleanupTransaction()
         {

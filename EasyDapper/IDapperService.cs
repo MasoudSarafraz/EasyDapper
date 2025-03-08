@@ -10,7 +10,6 @@ namespace EasyDapper
     public interface IDapperService : IDisposable
     {
         IQueryBuilder<T> Query<T>();
-        //IStoredProcedureExecutor<T> CreateStoredProcedureExecutor<T>();
         int Insert<T>(T entity) where T : class;
         Task<int> InsertAsync<T>(T entity) where T : class;
         int InsertList<T>(IEnumerable<T> entities, bool generateIdentities = false) where T : class;
@@ -37,5 +36,9 @@ namespace EasyDapper
         Task<IEnumerable<T>> ExecuteStoredProcedureAsync<T>(string procedureName, object parameters = null, CancellationToken cancellationToken = default) where T : class;
         T ExecuteMultiResultStoredProcedure<T>(string procedureName, Func<SqlMapper.GridReader, T> mapper, object parameters = null, IDbTransaction transaction = null, int? commandTimeout = null) where T : class;
         Task<T> ExecuteMultiResultStoredProcedureAsync<T>(string procedureName, Func<SqlMapper.GridReader, Task<T>> asyncMapper, object parameters = null, IDbTransaction transaction = null, int? commandTimeout = null, CancellationToken cancellationToken = default) where T : class;
+        T ExecuteScalarFunction<T>(string functionName, object parameters = null);
+        Task<T> ExecuteScalarFunctionAsync<T>(string functionName, object parameters = null, CancellationToken cancellationToken = default);
+        IEnumerable<T> ExecuteTableFunction<T>(string functionName, object parameters);
+        Task<IEnumerable<T>> ExecuteTableFunctionAsync<T>(string functionName, object parameters, CancellationToken cancellationToken = default);
     }
 }
