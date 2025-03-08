@@ -60,3 +60,14 @@ var balance = await executor.ExecuteScalarFunctionAsync<double>(
     "GetUserAccountBalance",
     new { UserId = 123, Currency = "USD" }
 );
+
+//اضافه کردن شرطها در انتها
+var oExpressions = new List<Expression<Func<Person, bool>>>();
+oExpressions.Add(x => x.PARTY_ID == 2);
+oExpressions.Add(x=> x.IdNumber == "450");
+var Query = SQL.Query<Person>();
+foreach (var oExpression in oExpressions)
+{
+    Query = Query.Where(oExpression);
+}
+var result = Query.Execute();
