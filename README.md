@@ -330,39 +330,12 @@ var results = dapperService.Query<Person>()
     .Row_Number(u => u.Department, u => u.Salary)
     .Execute();
 ```
-### Aggregate Functions
-
-```csharp
-// Sum
-var results = dapperService.Query<Person>()
-    .Sum(u => u.Salary, "TotalSalary")
-    .Execute();
-
-// Average
-var results = dapperService.Query<Person>()
-    .Avg(u => u.Age, "AverageAge")
-    .Execute();
-
-// Minimum
-var results = dapperService.Query<Person>()
-    .Min(u => u.Salary, "MinSalary")
-    .Execute();
-
-// Maximum
-var results = dapperService.Query<Person>()
-    .Max(u => u.Salary, "MaxSalary")
-    .Execute();
-
-// Count
-var results = dapperService.Query<Person>()
-    .Count(u => u.Id, "TotalCount")
-    .Execute();
-```
 ### Set Operations
 
 ```csharp
 // Distinct
 var results = dapperService.Query<Person>()
+    .Select(x=> x.Name)
     .Distinct()
     .Execute();
 
