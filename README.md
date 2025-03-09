@@ -1,4 +1,4 @@
-# DapperService
+# SQL Easy Dapper
 
 A high-performance, feature-rich Dapper-based data access service implementation that provides an extensive set of database operations with support for transactions, bulk operations, and entity tracking.
 A powerful and flexible SQL query builder implementation that supports LINQ-style syntax for building complex SQL queries with joins, aggregations, and more.
