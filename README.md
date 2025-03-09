@@ -14,7 +14,7 @@ A powerful and flexible SQL query builder implementation that supports LINQ-styl
 - 🔒 Thread-safe implementation
 - 🎯 Async support
 - 📝 Attribute-based mapping
-- 💾 Support multiple primary key
+- 💾 Support composite primary key
 - 🔍 LINQ-style query syntax
 - 🔄 Support for complex JOINs (INNER, LEFT, RIGHT, FULL)
 - 📊 Aggregation functions (SUM, AVG, MIN, MAX, COUNT)
@@ -46,6 +46,7 @@ public class Product
     public int Id { get; set; }
     
     [Column("ProductName")]
+    [PrimaryKey]
     public string Name { get; set; }
     
     public decimal Price { get; set; }
