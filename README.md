@@ -38,7 +38,7 @@ IDapperService dapperService = DapperServiceFactory.Create("Your IDbConnection o
 ### Entity Class Example
 
 ```csharp
-[Table("Products", Schema = "dbo")]
+[Table(tableName: "Product", schema: "dbo")]
 public class Product
 {
     [PrimaryKey]
