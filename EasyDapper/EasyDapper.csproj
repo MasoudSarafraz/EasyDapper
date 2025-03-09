@@ -9,6 +9,7 @@
 		<Description>A professional Dapper library with CRUD, dynamic queries, stored procedures, attributes, thread-safety, and transaction support.</Description>
 		<Title>Easy to use Dapper</Title>
 		<RepositoryUrl>https://github.com/MasoudSarafraz/EasyDapper.git</RepositoryUrl>
+		<GeneratePackageOnBuild>True</GeneratePackageOnBuild>
 	</PropertyGroup>
 
 	<ItemGroup>
