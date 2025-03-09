@@ -21,11 +21,9 @@ A powerful and flexible SQL query builder implementation that supports LINQ-styl
 - 📝 GROUP BY and HAVING clauses
 - 🔄 APPLY operations (CROSS APPLY, OUTER APPLY)
 - 📋 Pagination support
-- 🎯 Attribute-based mapping
-- 🚀 Async/await support
 - 🔒 SQL injection prevention
 - 🎨 Expression tree parsing
-- 📝 Support Union,UnionAll,
+- 📝 Support Row_Number, Union, UnionAll, Except and Intersect
 
 ## Complete Method Examples
 
@@ -186,13 +184,6 @@ var results = dapperService.ExecuteStoredProcedure<Customer>(
     "GetCustomersByRegion",
     new { RegionId = 1 }
 );
-
-// Async execution
-var resultsAsync = await dapperService.ExecuteStoredProcedureAsync<Customer>(
-    "GetCustomersByRegion",
-    new { RegionId = 1 }
-);
-
 // Execute stored procedure with multiple result sets
 // Please note that this property utilizes a local Dapper data type named **GridReader**.
 // Therefore, to use this feature, you must add the **Dapper** library to your project references.
@@ -238,23 +229,164 @@ var totalValue = dapperService.ExecuteScalarFunction<decimal>(
     new { OrderId = 1 }
 );
 
-// Async scalar function
-var totalValueAsync = await dapperService.ExecuteScalarFunctionAsync<decimal>(
-    "CalculateOrderTotal",
-    new { OrderId = 1 }
-);
-
 // Execute table-valued function
 var orderItems = dapperService.ExecuteTableFunction<OrderItem>(
     "GetOrderItems",
     new { OrderId = 1 }
 );
 
-// Async table-valued function
-var orderItemsAsync = await dapperService.ExecuteTableFunctionAsync<OrderItem>(
-    "GetOrderItems",
-    new { OrderId = 1 }
-);
+```
+### Basic Querying
+
+```csharp
+
+// Simple query with where clause
+var users = dapperService.Query<User>()
+    .Where(u => u.Age > 18 || u.Name.Contains("m") && u.IsActive == true)
+    .Execute();
+
+// Async execution
+var usersAsync = await dapperService.Query<User>()
+    .Where(u => u.Age > 18)
+    .ExecuteAsync();
+
+// Execute with different result type
+var dtos = dapperService.Query<User>()
+    .Where(u => u.Age > 18)
+    .Execute<UserDTO>();
+
+//You can build your expressions separately and then connect them to the query at the end
+var expressions = new List<Expression<Func<Person, bool>>>();
+expressions.Add(x => x.PARTY_ID == 2);
+expressions.Add(x=> x.IdNumber == "450");
+var Query = SQL.Query<Person>();
+foreach (var expression in expressions)
+{
+    Query = Query.Where(expression);
+}
+var result = Query.Execute();
+
+```
+### Select Specific Columns
+
+```csharp
+var results = dapperService.Query<User>()
+    .Select(u => u.Name, u => u.Email)
+    .Execute();
+
+```
+### Pagination
+
+```csharp
+var pageSize = 10;
+var pageNumber = 1;
+var results = queryBuilder
+    .Paging(pageSize, pageNumber)
+    .Execute();
+```
+### Joins
+
+```csharp
+var result = dapperService.Query<Person>()
+.InnerJoin<Person, Party>((x, p) => x.PARTY_ID == p.PartyId)
+.Execute();
+
+var result = dapperService.Query<Person>()
+.InnerJoin<Person, Party>((x, p) => x.PARTY_ID == p.PartyId)
+.LeftJoin<Person, Party>((x, p) => p.PartyId == x.PARTY_ID)
+.Select<Party>(x => x.Party_Code)
+.Top(10)
+.Where(x => x.PARTY_ID == 129 && x.CurrentFirstName.Contains("س"))
+.Execute();
+
+```
+### APPLY Operations
+
+```csharp
+// Cross Apply
+var results = queryBuilder
+    .CrossApply<SubQuery>((main, sub) => main.Id == sub.MainId,
+        subQuery => subQuery.Where(s => s.Value > 100))
+    .Execute();
+or without subquery
+var results = queryBuilder
+    .CrossApply<SubQuery>((main, sub) => main.Id == sub.MainId,null)
+    .Execute();
+
+// Outer Apply
+var results = dapperService.Query<Person>()
+.InnerJoin<Person, Party>((x, p) => x.PARTY_ID == p.PartyId)
+.OuterApply<Party>(
+    (x, p) => x.PARTY_ID == p.PartyId,
+    subQuery => subQuery.Where(a => a.PartyId == 117))
+.Where(x => x.PARTY_ID == 117 && x.CurrentFirstName.Contains("J"))
+.Execute();
+```
+### Row Numbers
+
+```csharp
+var results = dapperService.Query<Person>()
+    .Row_Number(u => u.Department, u => u.Salary)
+    .Execute();
+```
+### Aggregate Functions
+
+```csharp
+// Sum
+var results = dapperService.Query<Person>()
+    .Sum(u => u.Salary, "TotalSalary")
+    .Execute();
+
+// Average
+var results = dapperService.Query<Person>()
+    .Avg(u => u.Age, "AverageAge")
+    .Execute();
+
+// Minimum
+var results = dapperService.Query<Person>()
+    .Min(u => u.Salary, "MinSalary")
+    .Execute();
+
+// Maximum
+var results = dapperService.Query<Person>()
+    .Max(u => u.Salary, "MaxSalary")
+    .Execute();
+
+// Count
+var results = dapperService.Query<Person>()
+    .Count(u => u.Id, "TotalCount")
+    .Execute();
+```
+### Set Operations
+
+```csharp
+// Distinct
+var results = dapperService.Query<Person>()
+    .Distinct()
+    .Execute();
+
+// Top
+var results = dapperService.Query<Person>()
+    .Top(10)
+    .Execute();
+
+// Union
+var result = dapperService.Query<Person>();
+var result2 = dapperService.Query<Person>().Where(x=> x.Age > 10);
+var res = result.Union(result2).Execute();
+```
+## Complex Query Example
+
+```csharp
+var results = dapperService.Query<Person>()
+    .Select(u => u.Name, u => u.Department)
+    .InnerJoin<User, Department>((u, d) => u.DepartmentId == d.Id)
+    .Where(u => u.Age > 25)
+    .GroupBy(u => u.Department)
+    .Having(g => g.Count() > 5)
+    .OrderBy("Department ASC")
+    .Paging(10, 1)
+    .Execute<PersonDto>();
 ```
 
 ## License
