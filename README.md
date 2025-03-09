@@ -281,7 +281,7 @@ var results = dapperService.Query<User>()
 ```csharp
 var pageSize = 10;
 var pageNumber = 1;
-var results = queryBuilder
+var results = dapperService.Query<User>()
     .Paging(pageSize, pageNumber)
     .Execute();
 ```
