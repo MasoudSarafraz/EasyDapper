@@ -309,7 +309,7 @@ var results = queryBuilder
     .CrossApply<SubQuery>((main, sub) => main.Id == sub.MainId,
         subQuery => subQuery.Where(s => s.Value > 100))
     .Execute();
-or without subquery
+// without subquery
 var results = queryBuilder
     .CrossApply<SubQuery>((main, sub) => main.Id == sub.MainId,null)
     .Execute();
