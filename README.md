@@ -389,7 +389,8 @@ var results = dapperService.Query<Person>()
     .Paging(10, 1)
     .Execute<PersonDto>();
 ```
-
+## Warning
+Keep in mind that your code will ultimately be translated into T-SQL commands. Therefore, logically, it must align with the structure of SQL queries.
 ## License
 
 This project is licensed under the MIT License - see the LICENSE file for details.
