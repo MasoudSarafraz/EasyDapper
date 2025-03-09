@@ -61,7 +61,7 @@ var balance = await executor.ExecuteScalarFunctionAsync<double>(
     new { UserId = 123, Currency = "USD" }
 );
 
-//اضافه کردن شرطها در انتها
+//اضافه کردن همه شرطها در انتها
 var oExpressions = new List<Expression<Func<Person, bool>>>();
 oExpressions.Add(x => x.PARTY_ID == 2);
 oExpressions.Add(x=> x.IdNumber == "450");
