@@ -31,6 +31,9 @@ A powerful and flexible SQL query builder implementation that supports LINQ-styl
 
 ```csharp
 // Initialize with connection string
+
+using EasyDapper;
+using EasyDapper.Attributes;
 IDapperService dapperService = DapperServiceFactory.Create("Your Connection String");
 or
 IDapperService dapperService = DapperServiceFactory.Create("Your IDbConnection object");
