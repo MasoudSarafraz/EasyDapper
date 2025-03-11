@@ -282,10 +282,12 @@ var results = dapperService.Query<User>()
 ### Pagination
 
 ```csharp
+// Paging Always Must use with OrderBy
 var pageSize = 10;
 var pageNumber = 1;
 var results = dapperService.Query<User>()
     .Paging(pageSize, pageNumber)
+    .OrderBy("Name")
     .Execute();
 ```
 ### Joins
