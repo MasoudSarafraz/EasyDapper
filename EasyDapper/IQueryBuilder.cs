@@ -17,6 +17,8 @@ namespace EasyDapper
         IQueryBuilder<T> Select<TSource>(params Expression<Func<TSource, object>>[] columns);
         IQueryBuilder<T> Count();
         IQueryBuilder<T> OrderBy(string orderByClause);
+        IQueryBuilder<T> OrderByAscending(Expression<Func<T, object>> keySelector);
+        IQueryBuilder<T> OrderByDescending(Expression<Func<T, object>> keySelector);
         IQueryBuilder<T> Paging(int pageSize, int pageNumber = 1);
         IQueryBuilder<T> CustomJoin<TLeft, TRight>(string stringJoin, Expression<Func<TLeft, TRight, bool>> onCondition);
         IQueryBuilder<T> InnerJoin<TLeft, TRight>(Expression<Func<TLeft, TRight, bool>> onCondition);

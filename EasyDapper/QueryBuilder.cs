@@ -304,6 +304,49 @@ namespace EasyDapper
             _exceptClause = $" EXCEPT {queryBuilder.BuildQuery()}";
             return this;
         }
+        public IQueryBuilder<T> OrderByAscending(Expression<Func<T, object>> keySelector)
+        {
+            return OrderBy(keySelector, "ASC");
+        }
+
+        public IQueryBuilder<T> OrderByDescending(Expression<Func<T, object>> keySelector)
+        {
+            return OrderBy(keySelector, "DESC");
+        }
+        private IQueryBuilder<T> OrderBy(Expression<Func<T, object>> keySelector, string order)
+        {
+            if (keySelector == null)
+            {
+                throw new ArgumentNullException(nameof(keySelector));
+            }
+            var newExpression = keySelector.Body as NewExpression;
+            if (newExpression == null && keySelector.Body is UnaryExpression unary)
+            {
+                newExpression = unary.Operand as NewExpression;
+            }
+            var columns = new List<string>();
+
+            if (newExpression != null)
+            {
+                foreach (var arg in newExpression.Arguments)
+                {
+                    columns.Add(ParseMember(arg) + $" {order}");
+                }
+            }
+            else
+            {
+                columns.Add(ParseMember(keySelector.Body) + $" {order}");
+            }
+            if (string.IsNullOrEmpty(_orderByClause))
+            {
+                _orderByClause = string.Join(", ", columns);
+            }
+            else
+            {
+                _orderByClause = _orderByClause + ", " + string.Join(", ", columns);
+            }
+            return this;
+        }
         private void AddJoin<TLeft, TRight>(string joinType, Expression<Func<TLeft, TRight, bool>> onCondition)
         {
             //ابتدا سمت چپ و راست اکسپرشن ها رو اصلاح میکنیم
@@ -378,7 +421,7 @@ namespace EasyDapper
                 }
             }
             else
-            {                
+            {
                 subQuerySql = $"SELECT * FROM {GetTableName(typeof(TSubQuery))} WHERE 1=1";
             }
             var onConditionString = ParseExpression(onCondition.Body)
