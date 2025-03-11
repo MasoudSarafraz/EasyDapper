@@ -287,8 +287,26 @@ var pageSize = 10;
 var pageNumber = 1;
 var results = dapperService.Query<User>()
     .Paging(pageSize, pageNumber)
-    .OrderBy("Name")
+    .OrderByAscending(x => x.Name)
     .Execute();
+```
+### Order
+
+```csharp
+var order = dapperService.Query<Goods>()
+.Where(x => x.GoodsId > 1000)
+.OrderByDescending(x => new { x.GoodsId, x.Name })
+.Execute();
+
+var order2 = dapperService.Query<Goods>()
+.Where(x => x.GoodsId > 1000)
+.OrderByAscending(x => x.Name)
+.Execute();
+
+var order3 = dapperService.Query<Goods>()
+.Where(x => x.GoodsId > 1000)
+.OrderBy("Name ASC, GoodsCode DESC")
+.Execute();
 ```
 ### Joins
 
