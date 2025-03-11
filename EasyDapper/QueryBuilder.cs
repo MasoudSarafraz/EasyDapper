@@ -134,7 +134,7 @@ namespace EasyDapper
         }
         public IQueryBuilder<T> OrderBy(string orderByClause)
         {
-            _orderByClause += orderByClause;
+            _orderByClause = orderByClause;
             return this;
         }
         public IQueryBuilder<T> Paging(int pageSize, int pageNumber = 1)
