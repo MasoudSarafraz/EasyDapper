@@ -1021,6 +1021,45 @@ namespace EasyDapper
             if (parameters == null) return "";
             return string.Join(", ", parameters.GetType().GetProperties().Select(p => $"@{p.Name}"));
         }
+        private int GetSqlServerVersion()
+        {
+            if (_lazyConnection == null || !_lazyConnection.IsValueCreated)
+            {
+                return 0;
+            }
+            try
+            {
+                var connection = GetOpenConnection();
+                if (connection.State != ConnectionState.Open)
+                {
+                    connection.Open();
+                }
+                string versionQuery = "SELECT CAST(SERVERPROPERTY('ProductMajorVersion') AS NVARCHAR(128))";
+                var majorVersion = connection.QueryFirstOrDefault<string>(versionQuery);
+
+                if (string.IsNullOrEmpty(majorVersion))
+                {
+                    return 0;
+                }
+                switch (majorVersion)
+                {
+                    case "16": return 2022;
+                    case "15": return 2019;
+                    case "14": return 2017;
+                    case "13": return 2016;
+                    case "12": return 2014;
+                    case "11": return 2012;
+                    case "10": return 2008;
+                    case "9": return 2005;
+                    case "8": return 2000;
+                    default: return int.TryParse(majorVersion, out int version) ? version : 0;
+                }
+            }
+            catch (Exception)
+            {
+                return 0;
+            }
+        }
         private void CleanupTransaction()
         {
             _transaction?.Dispose();
