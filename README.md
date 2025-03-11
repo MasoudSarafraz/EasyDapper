@@ -290,6 +290,19 @@ var results = dapperService.Query<User>()
     .OrderBy("Name")
     .Execute();
 ```
+### Order
+
+```csharp
+var order = dapperService.Query<Goods>()
+.Where(x => x.GoodsId > 1000)
+.OrderByDescending(x => new { x.GoodsId, x.Name })
+.Execute();
+
+var order2 = dapperService.Query<Goods>()
+.Where(x => x.GoodsId > 1000)
+.OrderByAscending(x => x.Name)
+.Execute();
+```
 ### Joins
 
 ```csharp
