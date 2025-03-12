@@ -353,6 +353,10 @@ var results = dapperService.Query<Person>()
 var results = dapperService.Query<Person>()
     .Row_Number(u => u.Department, u => u.Salary)
     .Execute();
+
+var results = dapperService.Query<Person>()
+    .Row_Number(x => new {x.PersonNumber,x.PersonCode}, x => x.Name, "Rows")
+    .Execute<PersonDto>()
 ```
 ### Set Operations
 
