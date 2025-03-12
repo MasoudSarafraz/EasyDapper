@@ -186,11 +186,55 @@ namespace EasyDapper
             AddJoin(stringJoin, onCondition);
             return this;
         }
-        public IQueryBuilder<T> Row_Number(Expression<Func<T, object>> partitionBy, Expression<Func<T, object>> orderBy)
+        public IQueryBuilder<T> Row_Number(Expression<Func<T, object>> partitionBy, Expression<Func<T, object>> orderBy, string alias = "RowNumber")
         {
-            var partitionByColumn = ParseMember(partitionBy.Body);
-            var orderByColumn = ParseMember(orderBy.Body);
-            _rowNumberClause = $"ROW_NUMBER() OVER (PARTITION BY {partitionByColumn} ORDER BY {orderByColumn}) AS RowNumber";
+            //var partitionByColumn = ParseMember(partitionBy.Body);
+            //var orderByColumn = ParseMember(orderBy.Body);
+            //_rowNumberClause = $"ROW_NUMBER() OVER (PARTITION BY {partitionByColumn} ORDER BY {orderByColumn}) AS RowNumber";
+            if (partitionBy == null)
+            {
+                throw new ArgumentNullException(nameof(partitionBy));
+            }
+            var newPartitionByExpression = partitionBy.Body as NewExpression;
+            if (newPartitionByExpression == null && partitionBy.Body is UnaryExpression unary)
+            {
+                newPartitionByExpression = unary.Operand as NewExpression;
+            }
+            var partitionByColumn = new List<string>();
+            if (newPartitionByExpression != null)
+            {
+                foreach (var arg in newPartitionByExpression.Arguments)
+                {
+                    partitionByColumn.Add(ParseMember(arg));
+                }
+            }
+            else
+            {
+                partitionByColumn.Add(ParseMember(partitionBy.Body));
+            }
+
+            if (orderBy == null)
+            {
+                throw new ArgumentNullException(nameof(orderBy));
+            }
+            var newOrderByExpression = orderBy.Body as NewExpression;
+            if (newOrderByExpression == null && orderBy.Body is UnaryExpression orderByunary)
+            {
+                newOrderByExpression = orderByunary.Operand as NewExpression;
+            }
+            var orderByColumn = new List<string>();
+            if (newOrderByExpression != null)
+            {
+                foreach (var arg in newOrderByExpression.Arguments)
+                {
+                    orderByColumn.Add(ParseMember(arg));
+                }
+            }
+            else
+            {
+                orderByColumn.Add(ParseMember(orderBy.Body));
+            }
+            _rowNumberClause = $"ROW_NUMBER() OVER (PARTITION BY {string.Join(", ", partitionByColumn)} ORDER BY {string.Join(", ", orderByColumn)}) AS {alias}";
             return this;
         }
         //private string BuildQuery()
@@ -308,7 +352,6 @@ namespace EasyDapper
         {
             return OrderBy(keySelector, "ASC");
         }
-
         public IQueryBuilder<T> OrderByDescending(Expression<Func<T, object>> keySelector)
         {
             return OrderBy(keySelector, "DESC");
