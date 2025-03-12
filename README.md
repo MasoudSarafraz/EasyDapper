@@ -282,6 +282,7 @@ var results = dapperService.Query<User>()
 ### Pagination
 
 ```csharp
+//Only from SQL 2012 and later
 // Paging Always Must use with OrderBy
 var pageSize = 10;
 var pageNumber = 1;
