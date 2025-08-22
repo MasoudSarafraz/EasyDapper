@@ -1,17 +1,19 @@
 ﻿using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Data;
 using System.Linq;
 using System.Linq.Expressions;
 using System.Reflection;
 using System.Text;
+using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 using Dapper;
 using EasyDapper.Attributes;
 
 namespace EasyDapper
 {
-    internal sealed class QueryBuilder<T> :IQueryBuilder<T>, IDisposable
+    internal sealed class QueryBuilder<T> : IQueryBuilder<T>, IDisposable
     {
         private readonly List<string> _filters = new List<string>();
         private readonly Dictionary<string, object> _parameters = new Dictionary<string, object>();
@@ -37,9 +39,10 @@ namespace EasyDapper
         private string _defaultSchema = "dbo";
         private readonly object _lockObject = new object();
         private bool _disposed = false;
-
         private readonly Dictionary<string, string> _tableAliasMappings = new Dictionary<string, string>();
         private readonly Dictionary<Type, string> _typeAliasMappings = new Dictionary<Type, string>();
+        private static readonly ConcurrentDictionary<Type, string> TableNameCache = new ConcurrentDictionary<Type, string>();
+        private static readonly ConcurrentDictionary<MemberInfo, string> ColumnNameCache = new ConcurrentDictionary<MemberInfo, string>();
 
         internal QueryBuilder(IDbConnection connection)
         {
@@ -52,9 +55,19 @@ namespace EasyDapper
 
             // ثبت alias برای جدول اصلی
             var mainTableName = GetTableName(typeof(T));
-            var mainAlias = GenerateAlias();
+            var mainAlias = GenerateAlias(mainTableName);
             _tableAliasMappings[mainTableName] = mainAlias;
             _typeAliasMappings[typeof(T)] = mainAlias;
+        }
+
+        public IQueryBuilder<T> WithTableAlias(string tableName, string customAlias)
+        {
+            if (string.IsNullOrEmpty(tableName) || string.IsNullOrEmpty(customAlias))
+            {
+                throw new ArgumentNullException("Table name and alias cannot be null or empty.");
+            }
+            _tableAliasMappings[tableName] = customAlias;
+            return this;
         }
 
         public IQueryBuilder<T> Where(Expression<Func<T, bool>> filter)
@@ -100,6 +113,10 @@ namespace EasyDapper
             {
                 string columnName = ParseMember(column.Body);
                 selectedColumns.Add(columnName);
+            }
+            if (_selectedColumns.Length > 0 && selectedColumns.Count > 0)
+            {
+                _selectedColumns += ", ";
             }
             _selectedColumns += string.Join(", ", selectedColumns);
             return this;
@@ -243,17 +260,17 @@ namespace EasyDapper
                 orderByColumns.Add(ParseMember(orderExpression));
             }
 
-            _rowNumberClause = $"ROW_NUMBER() OVER (PARTITION BY {string.Join(", ", partitionByColumns)} ORDER BY {string.Join(", ", orderByColumns)}) AS {alias}";
+            _rowNumberClause = "ROW_NUMBER() OVER (PARTITION BY " + string.Join(", ", partitionByColumns) + " ORDER BY " + string.Join(", ", orderByColumns) + ") AS " + alias;
             return this;
         }
 
         public IQueryBuilder<T> Sum(Expression<Func<T, object>> column, string alias = null)
         {
             var parsedColumn = ParseMember(column.Body);
-            var aggregateColumn = $"SUM({parsedColumn})";
+            var aggregateColumn = "SUM(" + parsedColumn + ")";
             if (!string.IsNullOrEmpty(alias))
             {
-                aggregateColumn += $" AS {alias}";
+                aggregateColumn += " AS " + alias;
             }
             _aggregateColumns.Add(aggregateColumn);
             return this;
@@ -262,10 +279,10 @@ namespace EasyDapper
         public IQueryBuilder<T> Avg(Expression<Func<T, object>> column, string alias = null)
         {
             var parsedColumn = ParseMember(column.Body);
-            var aggregateColumn = $"AVG({parsedColumn})";
+            var aggregateColumn = "AVG(" + parsedColumn + ")";
             if (!string.IsNullOrEmpty(alias))
             {
-                aggregateColumn += $" AS {alias}";
+                aggregateColumn += " AS " + alias;
             }
             _aggregateColumns.Add(aggregateColumn);
             return this;
@@ -274,10 +291,10 @@ namespace EasyDapper
         public IQueryBuilder<T> Min(Expression<Func<T, object>> column, string alias = null)
         {
             var parsedColumn = ParseMember(column.Body);
-            var aggregateColumn = $"MIN({parsedColumn})";
+            var aggregateColumn = "MIN(" + parsedColumn + ")";
             if (!string.IsNullOrEmpty(alias))
             {
-                aggregateColumn += $" AS {alias}";
+                aggregateColumn += " AS " + alias;
             }
             _aggregateColumns.Add(aggregateColumn);
             return this;
@@ -286,10 +303,10 @@ namespace EasyDapper
         public IQueryBuilder<T> Max(Expression<Func<T, object>> column, string alias = null)
         {
             var parsedColumn = ParseMember(column.Body);
-            var aggregateColumn = $"MAX({parsedColumn})";
+            var aggregateColumn = "MAX(" + parsedColumn + ")";
             if (!string.IsNullOrEmpty(alias))
             {
-                aggregateColumn += $" AS {alias}";
+                aggregateColumn += " AS " + alias;
             }
             _aggregateColumns.Add(aggregateColumn);
             return this;
@@ -298,10 +315,10 @@ namespace EasyDapper
         public IQueryBuilder<T> Count(Expression<Func<T, object>> column, string alias = null)
         {
             var parsedColumn = ParseMember(column.Body);
-            var aggregateColumn = $"COUNT({parsedColumn})";
+            var aggregateColumn = "COUNT(" + parsedColumn + ")";
             if (!string.IsNullOrEmpty(alias))
             {
-                aggregateColumn += $" AS {alias}";
+                aggregateColumn += " AS " + alias;
             }
             _aggregateColumns.Add(aggregateColumn);
             return this;
@@ -335,35 +352,35 @@ namespace EasyDapper
             {
                 throw new ArgumentOutOfRangeException(nameof(count), "Top count must be greater than zero.");
             }
-            _topClause = $"TOP {count}";
+            _topClause = "TOP " + count;
             return this;
         }
 
         public IQueryBuilder<T> Union(IQueryBuilder<T> IQueryBuilder)
         {
             if (IQueryBuilder == null) throw new ArgumentNullException(nameof(IQueryBuilder));
-            _unionClause = $" UNION {IQueryBuilder.BuildQuery()}";
+            _unionClause = " UNION " + IQueryBuilder.BuildQuery();
             return this;
         }
 
         public IQueryBuilder<T> UnionAll(IQueryBuilder<T> IQueryBuilder)
         {
             if (IQueryBuilder == null) throw new ArgumentNullException(nameof(IQueryBuilder));
-            _unionClause = $" UNION ALL {IQueryBuilder.BuildQuery()}";
+            _unionClause = " UNION ALL " + IQueryBuilder.BuildQuery();
             return this;
         }
 
         public IQueryBuilder<T> Intersect(IQueryBuilder<T> IQueryBuilder)
         {
             if (IQueryBuilder == null) throw new ArgumentNullException(nameof(IQueryBuilder));
-            _intersectClause = $" INTERSECT {IQueryBuilder.BuildQuery()}";
+            _intersectClause = " INTERSECT " + IQueryBuilder.BuildQuery();
             return this;
         }
 
         public IQueryBuilder<T> Except(IQueryBuilder<T> IQueryBuilder)
         {
             if (IQueryBuilder == null) throw new ArgumentNullException(nameof(IQueryBuilder));
-            _exceptClause = $" EXCEPT {IQueryBuilder.BuildQuery()}";
+            _exceptClause = " EXCEPT " + IQueryBuilder.BuildQuery();
             return this;
         }
 
@@ -376,6 +393,7 @@ namespace EasyDapper
         {
             return OrderBy(keySelector, "DESC");
         }
+
         public string GetRawSql()
         {
             return BuildQuery();
@@ -395,16 +413,16 @@ namespace EasyDapper
             {
                 foreach (var arg in newExpression.Arguments)
                 {
-                    columns.Add(ParseMember(arg) + $" {order}");
+                    columns.Add(ParseMember(arg) + " " + order);
                 }
             }
             else if (expression is UnaryExpression unary)
             {
-                columns.Add(ParseMember(unary.Operand) + $" {order}");
+                columns.Add(ParseMember(unary.Operand) + " " + order);
             }
             else
             {
-                columns.Add(ParseMember(expression) + $" {order}");
+                columns.Add(ParseMember(expression) + " " + order);
             }
 
             if (string.IsNullOrEmpty(_orderByClause))
@@ -424,26 +442,23 @@ namespace EasyDapper
             var leftTableName = GetTableName(typeof(TLeft));
             var rightTableName = GetTableName(typeof(TRight));
 
-            // اطمینان از ثبت alias برای جدول سمت چپ
+            // اطمینان از وجود alias برای جدول سمت چپ
             if (!_tableAliasMappings.ContainsKey(leftTableName))
             {
-                var leftAlias = GenerateAlias();
+                var leftAlias = GenerateAlias(leftTableName);
                 _tableAliasMappings[leftTableName] = leftAlias;
                 _typeAliasMappings[typeof(TLeft)] = leftAlias;
             }
 
-            // ثبت alias برای جدول سمت راست
+            // اطمینان از وجود alias برای جدول سمت راست
             if (!_tableAliasMappings.ContainsKey(rightTableName))
             {
-                var rightAlias = GenerateAlias();
+                var rightAlias = GenerateAlias(rightTableName);
                 _tableAliasMappings[rightTableName] = rightAlias;
                 _typeAliasMappings[typeof(TRight)] = rightAlias;
             }
 
-            var correctedExpression = CorrectCondition(onCondition.Body);
-            var parsedOnCondition = ParseExpression(correctedExpression);
-
-            // جایگزینی نام جداول با aliases در شرط JOIN
+            var parsedOnCondition = ParseExpression(onCondition.Body);
             parsedOnCondition = ReplaceTableNamesWithAliases(parsedOnCondition);
 
             _joins.Add(new JoinInfo
@@ -457,9 +472,10 @@ namespace EasyDapper
 
         private void AddApply<TSubQuery>(string applyType, Expression<Func<T, TSubQuery, bool>> onCondition, Func<IQueryBuilder<TSubQuery>, IQueryBuilder<TSubQuery>> subIQueryBuilder = null)
         {
+            // ساخت زیرپرس‌وجو
             var subQueryInstance = new QueryBuilder<TSubQuery>(_lazyConnection.Value);
             string subQuerySql;
-            var applyAlias = GenerateAlias();
+            string subMainAlias;
 
             if (subIQueryBuilder != null)
             {
@@ -468,38 +484,57 @@ namespace EasyDapper
                 {
                     throw new Exception("Failed to build sub-query");
                 }
-
                 subQuerySql = query.BuildQuery();
-                subQuerySql = subQuerySql.Replace(" AS T1", "").Replace("T1.", "");
 
-                foreach (var param in this._parameters)
+                // گرفتن alias جدول اصلی زیرپرس‌وجو
+                subMainAlias = ((QueryBuilder<TSubQuery>)query)._tableAliasMappings[GetTableName(typeof(TSubQuery))];
+
+                // ادغام پارامترها
+                foreach (var kv in ((QueryBuilder<TSubQuery>)query)._parameters)
                 {
-                    _parameters[param.Key] = param.Value;
+                    _parameters[kv.Key] = kv.Value;
                 }
             }
             else
             {
-                subQuerySql = $"SELECT * FROM {GetTableName(typeof(TSubQuery))} WHERE 1=1";
+                // زیرپرس‌وجوی پیش‌فرض: انتخاب همه ستون‌ها از جدول
+                var innerTable = GetTableName(typeof(TSubQuery));
+                subMainAlias = GenerateAlias(innerTable);
+                subQuerySql = $"SELECT * FROM {innerTable} AS {subMainAlias}";
             }
 
-            var onConditionString = ParseExpression(onCondition.Body)
-                .Replace("T1.", $"{GetAliasForTable(GetTableName(typeof(T)))}.")
-                .Replace($"{GetTableName(typeof(TSubQuery))}.", "");
+            // نگاشت نوع زیرپرس‌وجو به alias اصلی آن
+            string previous;
+            var hadPrev = _typeAliasMappings.TryGetValue(typeof(TSubQuery), out previous);
+            _typeAliasMappings[typeof(TSubQuery)] = subMainAlias;
 
-            if (subQuerySql.IndexOf("WHERE", StringComparison.OrdinalIgnoreCase) >= 0)
+            var onConditionString = ParseExpression(onCondition.Body);
+
+            if (hadPrev)
+                _typeAliasMappings[typeof(TSubQuery)] = previous;
+            else
+                _typeAliasMappings.Remove(typeof(TSubQuery));
+
+            // افزودن شرط همبستگی به زیرپرس‌وجو
+            if (Regex.IsMatch(subQuerySql, @"\bWHERE\b", RegexOptions.IgnoreCase))
             {
-                subQuerySql = subQuerySql.Replace("WHERE", $"WHERE {onConditionString} AND");
+                subQuerySql = Regex.Replace(subQuerySql, @"\bWHERE\b", match => $"WHERE ({onConditionString}) AND", RegexOptions.IgnoreCase);
             }
             else
             {
                 subQuerySql += $" WHERE {onConditionString}";
             }
 
+            // ایجاد alias برای زیرپرس‌وجو به‌عنوان جدول مشتق‌شده
+            var applyAlias = GenerateAlias(GetTableName(typeof(TSubQuery)));
             _applies.Add(new ApplyInfo
             {
                 ApplyType = applyType,
                 SubQuery = $"({subQuerySql}) AS {applyAlias}"
             });
+
+            // نگاشت نوع TSubQuery به alias جدول مشتق‌شده
+            _typeAliasMappings[typeof(TSubQuery)] = applyAlias;
         }
 
         public string BuildQuery()
@@ -535,12 +570,12 @@ namespace EasyDapper
 
         private string BuildGroupByClause()
         {
-            return _groupByColumns.Any() ? "GROUP BY " + string.Join(", ", _groupByColumns) : "";
+            return _groupByColumns.Any() ? "GROUP BY " + string.Join(", ", _groupByColumns) : string.Empty;
         }
 
         private string BuildHavingClause()
         {
-            return !string.IsNullOrEmpty(_havingClause) ? "HAVING " + _havingClause : "";
+            return !string.IsNullOrEmpty(_havingClause) ? "HAVING " + _havingClause : string.Empty;
         }
 
         private string ParseExpression(Expression expression)
@@ -572,7 +607,7 @@ namespace EasyDapper
                 case ExpressionType.MemberAccess:
                     return HandleMemberAccess((MemberExpression)expression);
                 default:
-                    throw new NotSupportedException($"Expression type '{expression.NodeType}' is not supported.");
+                    throw new NotSupportedException("Expression type '" + expression.NodeType + "' is not supported.");
             }
         }
 
@@ -637,20 +672,51 @@ namespace EasyDapper
                 case "EndsWith":
                     return HandleLike(expression, "%{0}");
                 case "Contains":
-                    return HandleLike(expression, "%{0}%");
+                    if (expression.Object != null)
+                    {
+                        return HandleLike(expression, "%{0}%");
+                    }
+                    else
+                    {
+                        return HandleIn(expression);
+                    }
                 case "IsNullOrEmpty":
                     return HandleIsNullOrEmpty(expression);
                 case "Between":
                     return HandleBetween(expression);
                 default:
-                    throw new NotSupportedException($"Method '{expression.Method.Name}' is not supported.");
+                    throw new NotSupportedException("Method '" + expression.Method.Name + "' is not supported.");
             }
+        }
+
+        private string HandleIn(MethodCallExpression expression)
+        {
+            if (expression.Arguments.Count == 2)
+            {
+                var member = ParseMember(expression.Arguments[1]);
+                var constExpr = expression.Arguments[0] as ConstantExpression;
+                if (constExpr != null && constExpr.Value is System.Collections.IEnumerable enumerable)
+                {
+                    var items = new List<string>();
+                    foreach (var obj in enumerable)
+                    {
+                        var p = GetUniqueParameterName();
+                        _parameters[p] = obj;
+                        items.Add(p);
+                    }
+                    return member + " IN (" + string.Join(",", items) + ")";
+                }
+            }
+            throw new NotSupportedException("Unsupported Contains signature.");
         }
 
         private string HandleLike(MethodCallExpression expression, string format)
         {
-            var property = ParseMember(expression.Object);
-            var value = ParseValue(expression.Arguments[0], format);
+            var property = ParseMember(expression.Object ?? expression.Arguments[0]);
+            var valueExpr = expression.Object != null ? expression.Arguments[0] : (expression.Arguments.Count > 1 ? expression.Arguments[1] : null);
+            if (valueExpr == null)
+                throw new NotSupportedException("LIKE requires a value.");
+            var value = ParseValue(valueExpr, format);
             return property + " LIKE " + value;
         }
 
@@ -677,13 +743,12 @@ namespace EasyDapper
 
             if (expression is MemberExpression member)
             {
-                var tableType = member.Expression?.Type;
+                var tableType = member.Expression != null ? member.Expression.Type : null;
                 if (tableType != null)
                 {
                     var alias = GetAliasForType(tableType);
-                    return $"{alias}.{GetColumnName(member.Member as PropertyInfo)}";
+                    return alias + "." + GetColumnName(member.Member as PropertyInfo);
                 }
-                // برای حالتی که expression ندارد (مثل پارامترهای متد)
                 return GetColumnName(member.Member as PropertyInfo);
             }
 
@@ -693,33 +758,36 @@ namespace EasyDapper
                 return alias;
             }
 
-            throw new NotSupportedException($"Unsupported expression: {expression}");
+            throw new NotSupportedException("Unsupported expression: " + expression);
         }
 
-        private string GenerateAlias()
+        private string GenerateAlias(string tableName)
         {
             lock (_lockObject)
             {
-                return "T" + _aliasCounter++;
+                // گرفتن نام جدول بدون Schema
+                var shortTableName = tableName.Split('.').Last().Trim('[', ']');
+                // محدود کردن طول نام جدول برای خوانایی
+                shortTableName = shortTableName.Length > 10 ? shortTableName.Substring(0, 10) : shortTableName;
+                // تولید alias با پسوند افزایشی
+                return $"{shortTableName}_A{_aliasCounter++}";
             }
         }
 
         private string GetAliasForTable(string tableName)
         {
-            if (_tableAliasMappings.TryGetValue(tableName, out string alias))
+            if (_tableAliasMappings.TryGetValue(tableName, out var alias))
             {
                 return alias;
             }
-
-            // اگر جدول ثبت نشده، یک alias جدید ایجاد کنید
-            var newAlias = GenerateAlias();
+            var newAlias = GenerateAlias(tableName);
             _tableAliasMappings[tableName] = newAlias;
             return newAlias;
         }
 
         private string GetAliasForType(Type type)
         {
-            if (_typeAliasMappings.TryGetValue(type, out string alias))
+            if (_typeAliasMappings.TryGetValue(type, out var alias))
             {
                 return alias;
             }
@@ -732,7 +800,8 @@ namespace EasyDapper
         {
             foreach (var mapping in _tableAliasMappings)
             {
-                expression = expression.Replace(mapping.Key, mapping.Value);
+                var pattern = Regex.Escape(mapping.Key);
+                expression = Regex.Replace(expression, pattern, mapping.Value);
             }
             return expression;
         }
@@ -744,9 +813,9 @@ namespace EasyDapper
                 var paramName = GetUniqueParameterName();
                 var value = constant.Value;
 
-                if (format != null && value is string str)
+                if (format != null && value is string)
                 {
-                    value = string.Format(format, str);
+                    value = string.Format(format, value);
                 }
 
                 _parameters[paramName] = value;
@@ -754,20 +823,37 @@ namespace EasyDapper
             }
             else if (expression is MemberExpression member)
             {
+                if (member.Expression != null && member.Expression.NodeType == ExpressionType.Constant)
+                {
+                    var value = GetValue(member);
+                    var paramName = GetUniqueParameterName();
+                    _parameters[paramName] = value;
+                    return paramName;
+                }
                 return ParseMember(member);
             }
             else if (expression is BinaryExpression binary)
             {
                 var left = ParseValue(binary.Left);
                 var right = ParseValue(binary.Right);
-                return $"{left} {GetOperator(binary.NodeType)} {right}";
+                return left + " " + GetOperator(binary.NodeType) + " " + right;
             }
             else if (expression is UnaryExpression unary)
             {
                 return ParseValue(unary.Operand);
             }
 
-            throw new NotSupportedException($"Unsupported expression: {expression}");
+            throw new NotSupportedException("Unsupported expression: " + expression);
+        }
+
+        private static object GetValue(MemberExpression member)
+        {
+            var obj = ((ConstantExpression)member.Expression).Value;
+            if (member.Member is FieldInfo fi)
+                return fi.GetValue(obj);
+            if (member.Member is PropertyInfo pi)
+                return pi.GetValue(obj, null);
+            return null;
         }
 
         private string GetOperator(ExpressionType nodeType)
@@ -791,32 +877,39 @@ namespace EasyDapper
                 case ExpressionType.OrElse:
                     return "OR";
                 default:
-                    throw new NotSupportedException($"Unsupported operator: {nodeType}");
+                    throw new NotSupportedException("Unsupported operator: " + nodeType);
             }
         }
 
         private bool IsNullConstant(Expression expression)
         {
-            return expression is ConstantExpression constant && constant.Value == null;
+            var constant = expression as ConstantExpression;
+            return constant != null && constant.Value == null;
         }
 
         private string GetTableName(Type type)
         {
-            var tableAttr = type.GetCustomAttribute<TableAttribute>();
-            return tableAttr == null
-                ? $"[{_defaultSchema}].[{type.Name}]"
-                : $"[{tableAttr.Schema ?? _defaultSchema}].[{tableAttr.TableName}]";
+            return TableNameCache.GetOrAdd(type, t =>
+            {
+                var tableAttr = t.GetCustomAttribute<TableAttribute>();
+                return tableAttr == null
+                    ? "[" + _defaultSchema + "].[" + t.Name + "]"
+                    : "[" + (tableAttr.Schema ?? _defaultSchema) + "].[" + tableAttr.TableName + "]";
+            });
         }
 
         private string GetColumnName(PropertyInfo property)
         {
-            var column = property.GetCustomAttribute<ColumnAttribute>();
-            return "[" + Escape(column?.ColumnName ?? property.Name) + "]";
+            return ColumnNameCache.GetOrAdd(property, p =>
+            {
+                var column = p.GetCustomAttribute<ColumnAttribute>();
+                return "[" + Escape(column != null ? column.ColumnName : p.Name) + "]";
+            });
         }
 
         private static string Escape(string identifier)
         {
-            return identifier?.Replace("]", "]]") ?? string.Empty;
+            return identifier != null ? identifier.Replace("]", "]]") : string.Empty;
         }
 
         private IDbConnection GetOpenConnection()
@@ -831,10 +924,20 @@ namespace EasyDapper
 
         private string BuildSelectClause()
         {
-            var columns = _isCountQuery ? "COUNT(*) AS TotalCount"
-                : string.IsNullOrEmpty(_selectedColumns)
-                ? string.Join(", ", typeof(T).GetProperties().Select(p => $"{GetAliasForType(typeof(T))}.{GetColumnName(p)} AS {p.Name}"))
-                : _selectedColumns;
+            string columns;
+            if (_isCountQuery)
+            {
+                columns = "COUNT(*) AS TotalCount";
+            }
+            else if (string.IsNullOrEmpty(_selectedColumns))
+            {
+                var alias = GetAliasForType(typeof(T));
+                columns = string.Join(", ", typeof(T).GetProperties().Select(p => alias + "." + GetColumnName(p) + " AS " + p.Name));
+            }
+            else
+            {
+                columns = _selectedColumns;
+            }
 
             if (!string.IsNullOrEmpty(_rowNumberClause))
             {
@@ -843,34 +946,34 @@ namespace EasyDapper
 
             if (_aggregateColumns.Any())
             {
-                columns = string.Join(", ", _aggregateColumns) + (string.IsNullOrEmpty(columns) ? "" : ", " + columns);
+                columns = string.Join(", ", _aggregateColumns) + (string.IsNullOrEmpty(columns) ? string.Empty : ", " + columns);
             }
 
-            var result = $"SELECT";
+            var result = new StringBuilder("SELECT");
 
             if (!string.IsNullOrEmpty(_distinctClause))
             {
-                result += $" {_distinctClause}";
+                result.Append(" ").Append(_distinctClause);
             }
 
             if (!string.IsNullOrEmpty(_topClause))
             {
-                result += $" {_topClause}";
+                result.Append(" ").Append(_topClause);
             }
 
             if (!string.IsNullOrEmpty(columns))
             {
-                result += $" {columns}";
+                result.Append(" ").Append(columns);
             }
 
-            return result;
+            return result.ToString();
         }
 
         private string BuildFromClause()
         {
             var tableName = GetTableName(typeof(T));
             var alias = GetAliasForTable(tableName);
-            return $" FROM {tableName} AS {alias}";
+            return " FROM " + tableName + " AS " + alias;
         }
 
         private string BuildJoinClauses()
@@ -881,7 +984,7 @@ namespace EasyDapper
                 sb.Append(" ")
                   .Append(join.JoinType)
                   .Append(" ")
-                  .Append($"{join.TableName} AS {join.Alias}")
+                  .Append(join.TableName + " AS " + join.Alias)
                   .Append(" ON ")
                   .Append(join.OnCondition);
             }
@@ -903,26 +1006,27 @@ namespace EasyDapper
 
         private string BuildWhereClause()
         {
-            return _filters.Any() ? "WHERE " + string.Join(" AND ", _filters) : "";
+            return _filters.Any() ? "WHERE " + string.Join(" AND ", _filters) : string.Empty;
         }
 
         private string BuildOrderByClause()
         {
-            return !string.IsNullOrEmpty(_orderByClause) ? "ORDER BY " + _orderByClause : "";
+            return !string.IsNullOrEmpty(_orderByClause) ? "ORDER BY " + _orderByClause : string.Empty;
         }
 
         private string BuildPaginationClause()
         {
             if (_limit.HasValue)
             {
-                return $"OFFSET {_offset} ROWS FETCH NEXT {_limit} ROWS ONLY";
+                return "OFFSET " + _offset + " ROWS FETCH NEXT " + _limit + " ROWS ONLY";
             }
-            return "";
+            return string.Empty;
         }
 
         private Expression CorrectCondition(Expression body)
         {
-            if (body is BinaryExpression binaryExpression)
+            var binaryExpression = body as BinaryExpression;
+            if (binaryExpression != null)
             {
                 var leftType = GetExpressionType(binaryExpression.Left);
                 var rightType = GetExpressionType(binaryExpression.Right);
@@ -944,7 +1048,8 @@ namespace EasyDapper
 
         private Type GetExpressionType(Expression expression)
         {
-            if (expression is MemberExpression memberExpression && memberExpression.Expression != null)
+            var memberExpression = expression as MemberExpression;
+            if (memberExpression != null && memberExpression.Expression != null)
             {
                 return memberExpression.Expression.Type;
             }
@@ -956,7 +1061,10 @@ namespace EasyDapper
         {
             lock (_lockObject)
             {
-                return "@p" + _parameters.Count;
+                var tableName = GetTableName(typeof(T));
+                var shortTableName = tableName.Split('.').Last().Trim('[', ']');
+                shortTableName = shortTableName.Length > 10 ? shortTableName.Substring(0, 10) : shortTableName;
+                return $"@{shortTableName}_A{_aliasCounter}_p{_parameters.Count}";
             }
         }
 
@@ -964,7 +1072,7 @@ namespace EasyDapper
         {
             if (!_disposed)
             {
-                if (_lazyConnection?.IsValueCreated == true)
+                if (_lazyConnection != null && _lazyConnection.IsValueCreated)
                 {
                     _lazyConnection.Value.Dispose();
                 }
@@ -972,7 +1080,6 @@ namespace EasyDapper
             }
         }
 
-        // کلاس برای ذخیره اطلاعات JOIN
         private class JoinInfo
         {
             public string JoinType { get; set; }
@@ -981,7 +1088,6 @@ namespace EasyDapper
             public string OnCondition { get; set; }
         }
 
-        // کلاس برای ذخیره اطلاعات APPLY
         private class ApplyInfo
         {
             public string ApplyType { get; set; }
