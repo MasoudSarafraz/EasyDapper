@@ -43,6 +43,7 @@ namespace EasyDapper
         // Explicit Method for BuildQuery
         // به دلیل اینکه کلاس اینترنال هستش متد های OuterApply و CrossApply به مشکل میخوردند . بنابراین
         string BuildQuery();
+        string GetRawSql();
     }
 
 }
