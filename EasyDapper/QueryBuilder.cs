@@ -6,7 +6,6 @@ using System.Linq;
 using System.Linq.Expressions;
 using System.Reflection;
 using System.Text;
-using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
 using Dapper;
@@ -36,7 +35,7 @@ namespace EasyDapper
         private readonly ConcurrentDictionary<Type, string> _typeAliasMappings = new ConcurrentDictionary<Type, string>();
         private readonly ConcurrentDictionary<Type, string> _subQueryTypeAliases = new ConcurrentDictionary<Type, string>();
 
-        // Instance fields (not volatile - each instance used by single thread)
+        // Instance fields
         private string _rowNumberClause = string.Empty;
         private string _havingClause = string.Empty;
         private int _timeOut;
@@ -91,49 +90,35 @@ namespace EasyDapper
         public IQueryBuilder<T> Where(Expression<Func<T, bool>> filter)
         {
             if (filter == null) throw new ArgumentNullException(nameof(filter));
-            var expression = ParseExpressionWithBrackets(filter.Body);
-            _filters.Enqueue(expression);
+            _filters.Enqueue(ParseExpressionWithBrackets(filter.Body));
             return this;
         }
 
         public IQueryBuilder<T> Select(params Expression<Func<T, object>>[] columns)
         {
             if (columns == null) return this;
-
             foreach (var c in columns)
                 _selectedColumnsQueue.Enqueue(ParseSelectMember(c.Body));
-
             return this;
         }
 
         public IQueryBuilder<T> Select<TSource>(params Expression<Func<TSource, object>>[] columns)
         {
             if (columns == null) return this;
-
             foreach (var c in columns)
                 _selectedColumnsQueue.Enqueue(ParseSelectMember(c.Body));
-
             return this;
         }
 
-        public IQueryBuilder<T> Distinct()
-        {
-            _distinctClause = "DISTINCT";
-            return this;
-        }
+        public IQueryBuilder<T> Distinct() => SetClause(ref _distinctClause, "DISTINCT");
 
         public IQueryBuilder<T> Top(int count)
         {
             if (count <= 0) throw new ArgumentOutOfRangeException(nameof(count));
-            _topClause = $"TOP ({count})";
-            return this;
+            return SetClause(ref _topClause, $"TOP ({count})");
         }
 
-        public IQueryBuilder<T> Count()
-        {
-            _isCountQuery = true;
-            return this;
-        }
+        public IQueryBuilder<T> Count() => SetFlag(ref _isCountQuery, true);
 
         public IQueryBuilder<T> OrderBy(string orderByClause)
         {
@@ -145,16 +130,16 @@ namespace EasyDapper
         public IQueryBuilder<T> OrderByAscending(Expression<Func<T, object>> keySelector)
         {
             if (keySelector == null) throw new ArgumentNullException(nameof(keySelector));
-            var columns = ExtractColumnListWithBrackets(keySelector.Body).Select(c => c + " ASC");
-            foreach (var col in columns) _orderByQueue.Enqueue(col);
+            foreach (var col in ExtractColumnListWithBrackets(keySelector.Body).Select(c => c + " ASC"))
+                _orderByQueue.Enqueue(col);
             return this;
         }
 
         public IQueryBuilder<T> OrderByDescending(Expression<Func<T, object>> keySelector)
         {
             if (keySelector == null) throw new ArgumentNullException(nameof(keySelector));
-            var columns = ExtractColumnListWithBrackets(keySelector.Body).Select(c => c + " DESC");
-            foreach (var col in columns) _orderByQueue.Enqueue(col);
+            foreach (var col in ExtractColumnListWithBrackets(keySelector.Body).Select(c => c + " DESC"))
+                _orderByQueue.Enqueue(col);
             return this;
         }
 
@@ -173,30 +158,20 @@ namespace EasyDapper
         #endregion
 
         #region Public API - Aggregates/Grouping/Having/RowNumber
-        public IQueryBuilder<T> Sum(Expression<Func<T, object>> column, string alias = null)
-        {
-            return AddAggregate("SUM", column.Body, alias);
-        }
+        public IQueryBuilder<T> Sum(Expression<Func<T, object>> column, string alias = null) =>
+            AddAggregate("SUM", column.Body, alias);
 
-        public IQueryBuilder<T> Avg(Expression<Func<T, object>> column, string alias = null)
-        {
-            return AddAggregate("AVG", column.Body, alias);
-        }
+        public IQueryBuilder<T> Avg(Expression<Func<T, object>> column, string alias = null) =>
+            AddAggregate("AVG", column.Body, alias);
 
-        public IQueryBuilder<T> Min(Expression<Func<T, object>> column, string alias = null)
-        {
-            return AddAggregate("MIN", column.Body, alias);
-        }
+        public IQueryBuilder<T> Min(Expression<Func<T, object>> column, string alias = null) =>
+            AddAggregate("MIN", column.Body, alias);
 
-        public IQueryBuilder<T> Max(Expression<Func<T, object>> column, string alias = null)
-        {
-            return AddAggregate("MAX", column.Body, alias);
-        }
+        public IQueryBuilder<T> Max(Expression<Func<T, object>> column, string alias = null) =>
+            AddAggregate("MAX", column.Body, alias);
 
-        public IQueryBuilder<T> Count(Expression<Func<T, object>> column, string alias = null)
-        {
-            return AddAggregate("COUNT", column.Body, alias);
-        }
+        public IQueryBuilder<T> Count(Expression<Func<T, object>> column, string alias = null) =>
+            AddAggregate("COUNT", column.Body, alias);
 
         private IQueryBuilder<T> AddAggregate(string fn, Expression expr, string alias)
         {
@@ -209,10 +184,8 @@ namespace EasyDapper
         public IQueryBuilder<T> GroupBy(params Expression<Func<T, object>>[] groupByColumns)
         {
             if (groupByColumns == null) return this;
-
             foreach (var column in groupByColumns)
                 _groupByColumns.Enqueue(ParseMemberWithBrackets(column.Body));
-
             return this;
         }
 
@@ -236,22 +209,22 @@ namespace EasyDapper
         #endregion
 
         #region Public API - Joins/Apply
-        public IQueryBuilder<T> InnerJoin<TLeft, TRight>(Expression<Func<TLeft, TRight, bool>> onCondition)
-        { AddJoin("INNER JOIN", onCondition); return this; }
+        public IQueryBuilder<T> InnerJoin<TLeft, TRight>(Expression<Func<TLeft, TRight, bool>> onCondition) =>
+            AddJoin("INNER JOIN", onCondition);
 
-        public IQueryBuilder<T> LeftJoin<TLeft, TRight>(Expression<Func<TLeft, TRight, bool>> onCondition)
-        { AddJoin("LEFT JOIN", onCondition); return this; }
+        public IQueryBuilder<T> LeftJoin<TLeft, TRight>(Expression<Func<TLeft, TRight, bool>> onCondition) =>
+            AddJoin("LEFT JOIN", onCondition);
 
-        public IQueryBuilder<T> RightJoin<TLeft, TRight>(Expression<Func<TLeft, TRight, bool>> onCondition)
-        { AddJoin("RIGHT JOIN", onCondition); return this; }
+        public IQueryBuilder<T> RightJoin<TLeft, TRight>(Expression<Func<TLeft, TRight, bool>> onCondition) =>
+            AddJoin("RIGHT JOIN", onCondition);
 
-        public IQueryBuilder<T> FullJoin<TLeft, TRight>(Expression<Func<TLeft, TRight, bool>> onCondition)
-        { AddJoin("FULL JOIN", onCondition); return this; }
+        public IQueryBuilder<T> FullJoin<TLeft, TRight>(Expression<Func<TLeft, TRight, bool>> onCondition) =>
+            AddJoin("FULL JOIN", onCondition);
 
-        public IQueryBuilder<T> CustomJoin<TLeft, TRight>(string join, Expression<Func<TLeft, TRight, bool>> onCondition)
-        { AddJoin(join, onCondition); return this; }
+        public IQueryBuilder<T> CustomJoin<TLeft, TRight>(string join, Expression<Func<TLeft, TRight, bool>> onCondition) =>
+            AddJoin(join, onCondition);
 
-        private void AddJoin<TLeft, TRight>(string joinType, Expression<Func<TLeft, TRight, bool>> onCondition)
+        private IQueryBuilder<T> AddJoin<TLeft, TRight>(string joinType, Expression<Func<TLeft, TRight, bool>> onCondition)
         {
             var leftTableName = GetTableName(typeof(TLeft));
             var rightTableName = GetTableName(typeof(TRight));
@@ -277,10 +250,10 @@ namespace EasyDapper
 
             // Create parameter mapping for condition parsing
             var parameterAliases = new Dictionary<ParameterExpression, string>
-    {
-        { onCondition.Parameters[0], leftAlias }, // Left table alias
-        { onCondition.Parameters[1], rightAlias } // Right table alias
-    };
+            {
+                { onCondition.Parameters[0], leftAlias },
+                { onCondition.Parameters[1], rightAlias }
+            };
 
             // Parse the condition with parameter mapping
             var parsed = ParseExpressionWithParameterMappingAndBrackets(onCondition.Body, parameterAliases);
@@ -303,22 +276,23 @@ namespace EasyDapper
 
             // Store the new alias for the right table
             _tableAliasMappings.TryAdd(joinKey, rightAlias);
+
+            return this;
         }
 
-        public IQueryBuilder<T> CrossApply<TSubQuery>(Expression<Func<T, TSubQuery, bool>> onCondition, Func<IQueryBuilder<TSubQuery>, IQueryBuilder<TSubQuery>> subBuilder)
-        { AddApply("CROSS APPLY", onCondition, subBuilder); return this; }
+        public IQueryBuilder<T> CrossApply<TSubQuery>(Expression<Func<T, TSubQuery, bool>> onCondition, Func<IQueryBuilder<TSubQuery>, IQueryBuilder<TSubQuery>> subBuilder) =>
+            AddApply("CROSS APPLY", onCondition, subBuilder);
 
-        public IQueryBuilder<T> OuterApply<TSubQuery>(Expression<Func<T, TSubQuery, bool>> onCondition, Func<IQueryBuilder<TSubQuery>, IQueryBuilder<TSubQuery>> subBuilder)
-        { AddApply("OUTER APPLY", onCondition, subBuilder); return this; }
+        public IQueryBuilder<T> OuterApply<TSubQuery>(Expression<Func<T, TSubQuery, bool>> onCondition, Func<IQueryBuilder<TSubQuery>, IQueryBuilder<TSubQuery>> subBuilder) =>
+            AddApply("OUTER APPLY", onCondition, subBuilder);
 
-        private void AddApply<TSubQuery>(string applyType, Expression<Func<T, TSubQuery, bool>> onCondition, Func<IQueryBuilder<TSubQuery>, IQueryBuilder<TSubQuery>> subBuilder)
+        private IQueryBuilder<T> AddApply<TSubQuery>(string applyType, Expression<Func<T, TSubQuery, bool>> onCondition, Func<IQueryBuilder<TSubQuery>, IQueryBuilder<TSubQuery>> subBuilder)
         {
             if (subBuilder == null) throw new ArgumentNullException(nameof(subBuilder));
 
             var sub = new QueryBuilder<TSubQuery>(_lazyConnection.Value);
             var qb = subBuilder(sub);
             if (qb == null) throw new InvalidOperationException("Sub-query builder returned null");
-
             var subQB = (QueryBuilder<TSubQuery>)qb;
             string subSql = subQB.BuildQuery();
 
@@ -328,8 +302,8 @@ namespace EasyDapper
             // Create parameter mapping for the condition
             var parameterAliases = new Dictionary<ParameterExpression, string>
             {
-                { onCondition.Parameters[0], GetAliasForType(typeof(T)) }, // Main table alias
-                { onCondition.Parameters[1], subMainAlias } // Subquery table alias
+                { onCondition.Parameters[0], GetAliasForType(typeof(T)) },
+                { onCondition.Parameters[1], subMainAlias }
             };
 
             // Parse the condition with parameter mapping
@@ -344,17 +318,10 @@ namespace EasyDapper
 
                 // Find the position of the next clause (GROUP BY, ORDER BY, HAVING)
                 int nextClauseIndex = FindNextClausePosition(subSql, insertIndex);
-
                 if (nextClauseIndex == -1)
-                {
-                    // No next clause, append at the end
                     subSql = subSql.Insert(insertIndex, "(" + onSql + ") AND ");
-                }
                 else
-                {
-                    // Insert before the next clause
                     subSql = subSql.Insert(insertIndex, "(" + onSql + ") AND ");
-                }
             }
             else
             {
@@ -377,21 +344,16 @@ namespace EasyDapper
                 SubQuery = $"({subSql}) AS {applyAlias}",
                 SubQueryAlias = applyAlias
             });
+
+            return this;
         }
         #endregion
 
         #region Public API - Set Operations
-        public IQueryBuilder<T> Union(IQueryBuilder<T> other)
-        { return AddSet("UNION", other); }
-
-        public IQueryBuilder<T> UnionAll(IQueryBuilder<T> other)
-        { return AddSet("UNION ALL", other); }
-
-        public IQueryBuilder<T> Intersect(IQueryBuilder<T> other)
-        { return AddSet("INTERSECT", other, isIntersect: true); }
-
-        public IQueryBuilder<T> Except(IQueryBuilder<T> other)
-        { return AddSet("EXCEPT", other, isExcept: true); }
+        public IQueryBuilder<T> Union(IQueryBuilder<T> other) => AddSet("UNION", other);
+        public IQueryBuilder<T> UnionAll(IQueryBuilder<T> other) => AddSet("UNION ALL", other);
+        public IQueryBuilder<T> Intersect(IQueryBuilder<T> other) => AddSet("INTERSECT", other, isIntersect: true);
+        public IQueryBuilder<T> Except(IQueryBuilder<T> other) => AddSet("EXCEPT", other, isExcept: true);
 
         private IQueryBuilder<T> AddSet(string op, IQueryBuilder<T> other, bool isIntersect = false, bool isExcept = false)
         {
@@ -406,26 +368,18 @@ namespace EasyDapper
 
             // Merge parameters from the other query builder
             if (other is QueryBuilder<T> otherQB)
-            {
                 MergeParameters(otherQB._parameters);
-            }
 
             return this;
         }
         #endregion
 
         #region Public API - Execution/Utility
-        public IEnumerable<T> Execute()
-        {
-            var query = BuildQuery();
-            return GetOpenConnection().Query<T>(query, _parameters, commandTimeout: _timeOut);
-        }
+        public IEnumerable<T> Execute() =>
+            GetOpenConnection().Query<T>(BuildQuery(), _parameters, commandTimeout: _timeOut);
 
-        public IEnumerable<TResult> Execute<TResult>()
-        {
-            var query = BuildQuery();
-            return GetOpenConnection().Query<TResult>(query, _parameters, commandTimeout: _timeOut);
-        }
+        public IEnumerable<TResult> Execute<TResult>() =>
+            GetOpenConnection().Query<TResult>(BuildQuery(), _parameters, commandTimeout: _timeOut);
 
         public async Task<IEnumerable<T>> ExecuteAsync()
         {
@@ -462,6 +416,7 @@ namespace EasyDapper
         public string BuildQuery()
         {
             ValidateAggregates();
+
             var selectClause = BuildSelectClause();
             var fromClause = BuildFromClause();
             var joinClauses = BuildJoinClauses();
@@ -499,27 +454,19 @@ namespace EasyDapper
 
         private string BuildSelectClause()
         {
-            string columns;
-            if (_isCountQuery)
-            {
-                columns = "COUNT(*) AS TotalCount";
-            }
-            else if (!_selectedColumnsQueue.Any())
-            {
-                var alias = GetAliasForType(typeof(T));
-                columns = string.Join(", ", typeof(T).GetProperties().Select(p =>
-                    $"{alias}.[{GetColumnName(p)}] AS {p.Name}"));
-            }
-            else
-            {
-                columns = string.Join(", ", _selectedColumnsQueue.ToArray());
-            }
+            string columns = _isCountQuery
+                ? "COUNT(*) AS TotalCount"
+                : !_selectedColumnsQueue.Any()
+                    ? string.Join(", ", typeof(T).GetProperties().Select(p =>
+                        $"{GetAliasForType(typeof(T))}.[{GetColumnName(p)}] AS {p.Name}"))
+                    : string.Join(", ", _selectedColumnsQueue.ToArray());
 
             if (!string.IsNullOrEmpty(_rowNumberClause))
                 columns = _rowNumberClause + ", " + columns;
 
             if (_aggregateColumns.Any())
-                columns = string.Join(", ", _aggregateColumns.ToArray()) + (string.IsNullOrEmpty(columns) ? string.Empty : ", " + columns);
+                columns = string.Join(", ", _aggregateColumns.ToArray()) +
+                         (string.IsNullOrEmpty(columns) ? string.Empty : ", " + columns);
 
             var result = new StringBuilder("SELECT");
             if (!string.IsNullOrEmpty(_distinctClause)) result.Append(' ').Append(_distinctClause);
@@ -558,16 +505,8 @@ namespace EasyDapper
 
         private string BuildWhereClause() => _filters.Any() ? "WHERE " + string.Join(" AND ", _filters.ToArray()) : string.Empty;
         private string BuildGroupByClause() => _groupByColumns.Any() ? "GROUP BY " + string.Join(", ", _groupByColumns.ToArray()) : string.Empty;
-
-        private string BuildHavingClause()
-        {
-            return !string.IsNullOrEmpty(_havingClause) ? "HAVING " + _havingClause : string.Empty;
-        }
-
-        private string BuildOrderByClause()
-        {
-            return _orderByQueue.Any() ? "ORDER BY " + string.Join(", ", _orderByQueue.ToArray()) : string.Empty;
-        }
+        private string BuildHavingClause() => !string.IsNullOrEmpty(_havingClause) ? "HAVING " + _havingClause : string.Empty;
+        private string BuildOrderByClause() => _orderByQueue.Any() ? "ORDER BY " + string.Join(", ", _orderByQueue.ToArray()) : string.Empty;
 
         private string BuildPaginationClause(string orderByClause)
         {
@@ -601,14 +540,11 @@ namespace EasyDapper
 
             var newExpr = expr as NewExpression;
             if (newExpr != null)
-            {
                 foreach (var a in newExpr.Arguments)
                     list.Add(ParseMember(a));
-            }
             else
-            {
                 list.Add(ParseMember(expr));
-            }
+
             return list;
         }
 
@@ -621,195 +557,123 @@ namespace EasyDapper
 
             var newExpr = expr as NewExpression;
             if (newExpr != null)
-            {
                 foreach (var a in newExpr.Arguments)
                     list.Add(ParseMemberWithBrackets(a));
-            }
             else
-            {
                 list.Add(ParseMemberWithBrackets(expr));
-            }
+
             return list;
         }
 
-        private string ParseExpression(Expression expression)
-        {
-            switch (expression.NodeType)
-            {
-                case ExpressionType.Equal: return HandleEqual((BinaryExpression)expression);
-                case ExpressionType.NotEqual: return HandleNotEqual((BinaryExpression)expression);
-                case ExpressionType.GreaterThan: return HandleBinary((BinaryExpression)expression, ">");
-                case ExpressionType.LessThan: return HandleBinary((BinaryExpression)expression, "<");
-                case ExpressionType.GreaterThanOrEqual: return HandleBinary((BinaryExpression)expression, ">=");
-                case ExpressionType.LessThanOrEqual: return HandleBinary((BinaryExpression)expression, "<=");
-                case ExpressionType.AndAlso: return "(" + ParseExpression(((BinaryExpression)expression).Left) + " AND " + ParseExpression(((BinaryExpression)expression).Right) + ")";
-                case ExpressionType.OrElse: return "(" + ParseExpression(((BinaryExpression)expression).Left) + " OR " + ParseExpression(((BinaryExpression)expression).Right) + ")";
-                case ExpressionType.Not: return "NOT (" + ParseExpression(((UnaryExpression)expression).Operand) + ")";
-                case ExpressionType.Call: return HandleMethodCall((MethodCallExpression)expression);
-                case ExpressionType.MemberAccess: return ParseMember((MemberExpression)expression);
-                case ExpressionType.Constant: return HandleConstant((ConstantExpression)expression);
-                case ExpressionType.Convert: return ParseExpression(((UnaryExpression)expression).Operand);
-                default:
-                    throw new NotSupportedException("Expression type '" + expression.NodeType + "' is not supported.");
-            }
-        }
+        private string ParseExpression(Expression expression) =>
+            ParseExpressionInternal(expression, useBrackets: false, parameterAliases: null);
 
-        private string ParseExpressionWithBrackets(Expression expression)
-        {
-            switch (expression.NodeType)
-            {
-                case ExpressionType.Equal: return HandleEqualWithBrackets((BinaryExpression)expression);
-                case ExpressionType.NotEqual: return HandleNotEqualWithBrackets((BinaryExpression)expression);
-                case ExpressionType.GreaterThan: return HandleBinaryWithBrackets((BinaryExpression)expression, ">");
-                case ExpressionType.LessThan: return HandleBinaryWithBrackets((BinaryExpression)expression, "<");
-                case ExpressionType.GreaterThanOrEqual: return HandleBinaryWithBrackets((BinaryExpression)expression, ">=");
-                case ExpressionType.LessThanOrEqual: return HandleBinaryWithBrackets((BinaryExpression)expression, "<=");
-                case ExpressionType.AndAlso: return "(" + ParseExpressionWithBrackets(((BinaryExpression)expression).Left) + " AND " + ParseExpressionWithBrackets(((BinaryExpression)expression).Right) + ")";
-                case ExpressionType.OrElse: return "(" + ParseExpressionWithBrackets(((BinaryExpression)expression).Left) + " OR " + ParseExpressionWithBrackets(((BinaryExpression)expression).Right) + ")";
-                case ExpressionType.Not: return "NOT (" + ParseExpressionWithBrackets(((UnaryExpression)expression).Operand) + ")";
-                case ExpressionType.Call: return HandleMethodCallWithBrackets((MethodCallExpression)expression);
-                case ExpressionType.MemberAccess: return ParseMemberWithBrackets((MemberExpression)expression);
-                case ExpressionType.Constant: return HandleConstant((ConstantExpression)expression);
-                case ExpressionType.Convert: return ParseExpressionWithBrackets(((UnaryExpression)expression).Operand);
-                default:
-                    throw new NotSupportedException("Expression type '" + expression.NodeType + "' is not supported.");
-            }
-        }
+        private string ParseExpressionWithBrackets(Expression expression) =>
+            ParseExpressionInternal(expression, useBrackets: true, parameterAliases: null);
 
-        private string ParseExpressionWithParameterMapping(Expression expression, Dictionary<ParameterExpression, string> parameterAliases)
+        private string ParseExpressionWithParameterMapping(Expression expression, Dictionary<ParameterExpression, string> parameterAliases) =>
+            ParseExpressionInternal(expression, useBrackets: false, parameterAliases: parameterAliases);
+
+        private string ParseExpressionWithParameterMappingAndBrackets(Expression expression, Dictionary<ParameterExpression, string> parameterAliases) =>
+            ParseExpressionInternal(expression, useBrackets: true, parameterAliases: parameterAliases);
+
+        private string ParseExpressionInternal(Expression expression, bool useBrackets, Dictionary<ParameterExpression, string> parameterAliases = null)
         {
             switch (expression.NodeType)
             {
+                case ExpressionType.Equal:
+                    return useBrackets
+                        ? HandleEqualWithBrackets((BinaryExpression)expression, parameterAliases)
+                        : HandleEqual((BinaryExpression)expression, parameterAliases);
+
+                case ExpressionType.NotEqual:
+                    return useBrackets
+                        ? HandleNotEqualWithBrackets((BinaryExpression)expression, parameterAliases)
+                        : HandleNotEqual((BinaryExpression)expression, parameterAliases);
+
+                case ExpressionType.GreaterThan:
+                case ExpressionType.LessThan:
+                case ExpressionType.GreaterThanOrEqual:
+                case ExpressionType.LessThanOrEqual:
+                    var op = GetOperator(expression.NodeType);
+                    return useBrackets
+                        ? HandleBinaryWithBrackets((BinaryExpression)expression, op, parameterAliases)
+                        : HandleBinary((BinaryExpression)expression, op, parameterAliases);
+
+                case ExpressionType.AndAlso:
+                    return "(" + ParseExpressionInternal(((BinaryExpression)expression).Left, useBrackets, parameterAliases) +
+                           " AND " + ParseExpressionInternal(((BinaryExpression)expression).Right, useBrackets, parameterAliases) + ")";
+
+                case ExpressionType.OrElse:
+                    return "(" + ParseExpressionInternal(((BinaryExpression)expression).Left, useBrackets, parameterAliases) +
+                           " OR " + ParseExpressionInternal(((BinaryExpression)expression).Right, useBrackets, parameterAliases) + ")";
+
+                case ExpressionType.Not:
+                    return "NOT (" + ParseExpressionInternal(((UnaryExpression)expression).Operand, useBrackets, parameterAliases) + ")";
+
+                case ExpressionType.Call:
+                    return useBrackets
+                        ? HandleMethodCallWithBrackets((MethodCallExpression)expression, parameterAliases)
+                        : HandleMethodCall((MethodCallExpression)expression, parameterAliases);
+
+                case ExpressionType.MemberAccess:
+                    return useBrackets
+                        ? ParseMemberWithBrackets((MemberExpression)expression, parameterAliases)
+                        : ParseMember((MemberExpression)expression, parameterAliases);
+
+                case ExpressionType.Constant:
+                    return HandleConstant((ConstantExpression)expression);
+
+                case ExpressionType.Convert:
+                    return ParseExpressionInternal(((UnaryExpression)expression).Operand, useBrackets, parameterAliases);
+
                 case ExpressionType.Parameter:
                     var paramExpr = (ParameterExpression)expression;
-                    if (parameterAliases.TryGetValue(paramExpr, out var alias))
+                    if (parameterAliases != null && parameterAliases.TryGetValue(paramExpr, out var alias))
                         return alias;
                     return GetAliasForType(paramExpr.Type);
 
-                case ExpressionType.Equal: return HandleEqual((BinaryExpression)expression, parameterAliases);
-                case ExpressionType.NotEqual: return HandleNotEqual((BinaryExpression)expression, parameterAliases);
-                case ExpressionType.GreaterThan: return HandleBinary((BinaryExpression)expression, ">", parameterAliases);
-                case ExpressionType.LessThan: return HandleBinary((BinaryExpression)expression, "<", parameterAliases);
-                case ExpressionType.GreaterThanOrEqual: return HandleBinary((BinaryExpression)expression, ">=", parameterAliases);
-                case ExpressionType.LessThanOrEqual: return HandleBinary((BinaryExpression)expression, "<=", parameterAliases);
-                case ExpressionType.AndAlso: return "(" + ParseExpressionWithParameterMapping(((BinaryExpression)expression).Left, parameterAliases) + " AND " + ParseExpressionWithParameterMapping(((BinaryExpression)expression).Right, parameterAliases) + ")";
-                case ExpressionType.OrElse: return "(" + ParseExpressionWithParameterMapping(((BinaryExpression)expression).Left, parameterAliases) + " OR " + ParseExpressionWithParameterMapping(((BinaryExpression)expression).Right, parameterAliases) + ")";
-                case ExpressionType.Not: return "NOT (" + ParseExpressionWithParameterMapping(((UnaryExpression)expression).Operand, parameterAliases) + ")";
-                case ExpressionType.Call: return HandleMethodCall((MethodCallExpression)expression, parameterAliases);
-                case ExpressionType.MemberAccess: return ParseMember((MemberExpression)expression, parameterAliases);
-                case ExpressionType.Constant: return HandleConstant((ConstantExpression)expression);
-                case ExpressionType.Convert: return ParseExpressionWithParameterMapping(((UnaryExpression)expression).Operand, parameterAliases);
                 default:
                     throw new NotSupportedException("Expression type '" + expression.NodeType + "' is not supported.");
             }
         }
 
-        private string ParseExpressionWithParameterMappingAndBrackets(Expression expression, Dictionary<ParameterExpression, string> parameterAliases)
-        {
-            switch (expression.NodeType)
-            {
-                case ExpressionType.Parameter:
-                    var paramExpr = (ParameterExpression)expression;
-                    if (parameterAliases.TryGetValue(paramExpr, out var alias))
-                        return alias;
-                    return GetAliasForType(paramExpr.Type);
-
-                case ExpressionType.Equal: return HandleEqualWithBrackets((BinaryExpression)expression, parameterAliases);
-                case ExpressionType.NotEqual: return HandleNotEqualWithBrackets((BinaryExpression)expression, parameterAliases);
-                case ExpressionType.GreaterThan: return HandleBinaryWithBrackets((BinaryExpression)expression, ">", parameterAliases);
-                case ExpressionType.LessThan: return HandleBinaryWithBrackets((BinaryExpression)expression, "<", parameterAliases);
-                case ExpressionType.GreaterThanOrEqual: return HandleBinaryWithBrackets((BinaryExpression)expression, ">=", parameterAliases);
-                case ExpressionType.LessThanOrEqual: return HandleBinaryWithBrackets((BinaryExpression)expression, "<=", parameterAliases);
-                case ExpressionType.AndAlso: return "(" + ParseExpressionWithParameterMappingAndBrackets(((BinaryExpression)expression).Left, parameterAliases) + " AND " + ParseExpressionWithParameterMappingAndBrackets(((BinaryExpression)expression).Right, parameterAliases) + ")";
-                case ExpressionType.OrElse: return "(" + ParseExpressionWithParameterMappingAndBrackets(((BinaryExpression)expression).Left, parameterAliases) + " OR " + ParseExpressionWithParameterMappingAndBrackets(((BinaryExpression)expression).Right, parameterAliases) + ")";
-                case ExpressionType.Not: return "NOT (" + ParseExpressionWithParameterMappingAndBrackets(((UnaryExpression)expression).Operand, parameterAliases) + ")";
-                case ExpressionType.Call: return HandleMethodCallWithBrackets((MethodCallExpression)expression, parameterAliases);
-                case ExpressionType.MemberAccess: return ParseMemberWithBrackets((MemberExpression)expression, parameterAliases);
-                case ExpressionType.Constant: return HandleConstant((ConstantExpression)expression);
-                case ExpressionType.Convert: return ParseExpressionWithParameterMappingAndBrackets(((UnaryExpression)expression).Operand, parameterAliases);
-                default:
-                    throw new NotSupportedException("Expression type '" + expression.NodeType + "' is not supported.");
-            }
-        }
-
-        private string HandleEqual(BinaryExpression expression)
-        {
-            if (IsNullConstant(expression.Right))
-                return ParseMember(expression.Left) + " IS NULL";
-            return HandleBinary(expression, "=");
-        }
-
-        private string HandleEqualWithBrackets(BinaryExpression expression)
-        {
-            if (IsNullConstant(expression.Right))
-                return ParseMemberWithBrackets(expression.Left) + " IS NULL";
-            return HandleBinaryWithBrackets(expression, "=");
-        }
-
-        private string HandleEqual(BinaryExpression expression, Dictionary<ParameterExpression, string> parameterAliases)
+        private string HandleEqual(BinaryExpression expression, Dictionary<ParameterExpression, string> parameterAliases = null)
         {
             if (IsNullConstant(expression.Right))
                 return ParseMember(expression.Left, parameterAliases) + " IS NULL";
             return HandleBinary(expression, "=", parameterAliases);
         }
 
-        private string HandleEqualWithBrackets(BinaryExpression expression, Dictionary<ParameterExpression, string> parameterAliases)
+        private string HandleEqualWithBrackets(BinaryExpression expression, Dictionary<ParameterExpression, string> parameterAliases = null)
         {
             if (IsNullConstant(expression.Right))
                 return ParseMemberWithBrackets(expression.Left, parameterAliases) + " IS NULL";
             return HandleBinaryWithBrackets(expression, "=", parameterAliases);
         }
 
-        private string HandleNotEqual(BinaryExpression expression)
-        {
-            if (IsNullConstant(expression.Right))
-                return ParseMember(expression.Left) + " IS NOT NULL";
-            return HandleBinary(expression, "<>");
-        }
-
-        private string HandleNotEqualWithBrackets(BinaryExpression expression)
-        {
-            if (IsNullConstant(expression.Right))
-                return ParseMemberWithBrackets(expression.Left) + " IS NOT NULL";
-            return HandleBinaryWithBrackets(expression, "<>");
-        }
-
-        private string HandleNotEqual(BinaryExpression expression, Dictionary<ParameterExpression, string> parameterAliases)
+        private string HandleNotEqual(BinaryExpression expression, Dictionary<ParameterExpression, string> parameterAliases = null)
         {
             if (IsNullConstant(expression.Right))
                 return ParseMember(expression.Left, parameterAliases) + " IS NOT NULL";
             return HandleBinary(expression, "<>", parameterAliases);
         }
 
-        private string HandleNotEqualWithBrackets(BinaryExpression expression, Dictionary<ParameterExpression, string> parameterAliases)
+        private string HandleNotEqualWithBrackets(BinaryExpression expression, Dictionary<ParameterExpression, string> parameterAliases = null)
         {
             if (IsNullConstant(expression.Right))
                 return ParseMemberWithBrackets(expression.Left, parameterAliases) + " IS NOT NULL";
             return HandleBinaryWithBrackets(expression, "<>", parameterAliases);
         }
 
-        private string HandleBinary(BinaryExpression expression, string op)
-        {
-            var left = ParseMember(expression.Left);
-            var right = ParseValue(expression.Right);
-            return left + " " + op + " " + right;
-        }
-
-        private string HandleBinaryWithBrackets(BinaryExpression expression, string op)
-        {
-            var left = ParseMemberWithBrackets(expression.Left);
-            var right = ParseValue(expression.Right);
-            return left + " " + op + " " + right;
-        }
-
-        private string HandleBinary(BinaryExpression expression, string op, Dictionary<ParameterExpression, string> parameterAliases)
+        private string HandleBinary(BinaryExpression expression, string op, Dictionary<ParameterExpression, string> parameterAliases = null)
         {
             var left = ParseMember(expression.Left, parameterAliases);
             var right = ParseValue(expression.Right, parameterAliases: parameterAliases);
             return left + " " + op + " " + right;
         }
 
-        private string HandleBinaryWithBrackets(BinaryExpression expression, string op, Dictionary<ParameterExpression, string> parameterAliases)
+        private string HandleBinaryWithBrackets(BinaryExpression expression, string op, Dictionary<ParameterExpression, string> parameterAliases = null)
         {
             var left = ParseMemberWithBrackets(expression.Left, parameterAliases);
             var right = ParseValue(expression.Right, parameterAliases: parameterAliases);
@@ -823,97 +687,7 @@ namespace EasyDapper
             return p;
         }
 
-        private string HandleMethodCall(MethodCallExpression m)
-        {
-            if (m.Method.DeclaringType == typeof(string))
-            {
-                if (m.Method.Name == "StartsWith") return HandleLike(m, "{0}%");
-                if (m.Method.Name == "EndsWith") return HandleLike(m, "%{0}");
-                if (m.Method.Name == "Contains") return HandleLike(m, "%{0}%");
-            }
-
-            if (m.Method.Name == "Contains" && m.Arguments.Count == 1)
-            {
-                var memberExpr = m.Arguments[0];
-                var listObject = Evaluate(m.Object) as System.Collections.IEnumerable;
-                if (listObject == null)
-                    throw new NotSupportedException("Unsupported Contains signature or non-constant collection.");
-
-                var memberSql = ParseMember(memberExpr);
-                var items = new List<string>();
-
-                foreach (var item in listObject)
-                {
-                    var p = GetUniqueParameterName();
-                    _parameters.TryAdd(p, item);
-                    items.Add(p);
-                }
-                return memberSql + " IN (" + string.Join(",", items) + ")";
-            }
-
-            if (m.Method.Name == "Between" && m.Arguments.Count == 3)
-            {
-                var property = ParseMember(m.Arguments[0]);
-                var lower = ParseValue(m.Arguments[1]);
-                var upper = ParseValue(m.Arguments[2]);
-                return property + " BETWEEN " + lower + " AND " + upper;
-            }
-
-            if (m.Method.Name == "IsNullOrEmpty" && m.Arguments.Count == 1 && m.Method.DeclaringType == typeof(string))
-            {
-                var prop = ParseMember(m.Arguments[0]);
-                return "(" + prop + " IS NULL OR " + prop + " = '')";
-            }
-
-            throw new NotSupportedException("Method '" + m.Method.Name + "' is not supported.");
-        }
-
-        private string HandleMethodCallWithBrackets(MethodCallExpression m)
-        {
-            if (m.Method.DeclaringType == typeof(string))
-            {
-                if (m.Method.Name == "StartsWith") return HandleLikeWithBrackets(m, "{0}%");
-                if (m.Method.Name == "EndsWith") return HandleLikeWithBrackets(m, "%{0}");
-                if (m.Method.Name == "Contains") return HandleLikeWithBrackets(m, "%{0}%");
-            }
-
-            if (m.Method.Name == "Contains" && m.Arguments.Count == 1)
-            {
-                var memberExpr = m.Arguments[0];
-                var listObject = Evaluate(m.Object) as System.Collections.IEnumerable;
-                if (listObject == null)
-                    throw new NotSupportedException("Unsupported Contains signature or non-constant collection.");
-
-                var memberSql = ParseMemberWithBrackets(memberExpr);
-                var items = new List<string>();
-
-                foreach (var item in listObject)
-                {
-                    var p = GetUniqueParameterName();
-                    _parameters.TryAdd(p, item);
-                    items.Add(p);
-                }
-                return memberSql + " IN (" + string.Join(",", items) + ")";
-            }
-
-            if (m.Method.Name == "Between" && m.Arguments.Count == 3)
-            {
-                var property = ParseMemberWithBrackets(m.Arguments[0]);
-                var lower = ParseValue(m.Arguments[1]);
-                var upper = ParseValue(m.Arguments[2]);
-                return property + " BETWEEN " + lower + " AND " + upper;
-            }
-
-            if (m.Method.Name == "IsNullOrEmpty" && m.Arguments.Count == 1 && m.Method.DeclaringType == typeof(string))
-            {
-                var prop = ParseMemberWithBrackets(m.Arguments[0]);
-                return "(" + prop + " IS NULL OR " + prop + " = '')";
-            }
-
-            throw new NotSupportedException("Method '" + m.Method.Name + "' is not supported.");
-        }
-
-        private string HandleMethodCall(MethodCallExpression m, Dictionary<ParameterExpression, string> parameterAliases)
+        private string HandleMethodCall(MethodCallExpression m, Dictionary<ParameterExpression, string> parameterAliases = null)
         {
             if (m.Method.DeclaringType == typeof(string))
             {
@@ -931,7 +705,6 @@ namespace EasyDapper
 
                 var memberSql = ParseMember(memberExpr, parameterAliases);
                 var items = new List<string>();
-
                 foreach (var item in listObject)
                 {
                     var p = GetUniqueParameterName();
@@ -958,7 +731,7 @@ namespace EasyDapper
             throw new NotSupportedException("Method '" + m.Method.Name + "' is not supported.");
         }
 
-        private string HandleMethodCallWithBrackets(MethodCallExpression m, Dictionary<ParameterExpression, string> parameterAliases)
+        private string HandleMethodCallWithBrackets(MethodCallExpression m, Dictionary<ParameterExpression, string> parameterAliases = null)
         {
             if (m.Method.DeclaringType == typeof(string))
             {
@@ -976,7 +749,6 @@ namespace EasyDapper
 
                 var memberSql = ParseMemberWithBrackets(memberExpr, parameterAliases);
                 var items = new List<string>();
-
                 foreach (var item in listObject)
                 {
                     var p = GetUniqueParameterName();
@@ -1003,83 +775,23 @@ namespace EasyDapper
             throw new NotSupportedException("Method '" + m.Method.Name + "' is not supported.");
         }
 
-        private string HandleLike(MethodCallExpression m, string format)
+        private string HandleLike(MethodCallExpression m, string format, Dictionary<ParameterExpression, string> parameterAliases = null)
         {
-            Expression propExpr;
-            Expression valueExpr;
-
-            if (m.Object != null)
-            {
-                propExpr = m.Object;
-                valueExpr = m.Arguments[0];
-            }
-            else
-            {
+            if (m.Object == null)
                 throw new NotSupportedException("LIKE requires instance method call on string.");
-            }
 
-            var prop = ParseMember(propExpr);
-            var val = ParseValue(valueExpr, format);
+            var prop = ParseMember(m.Object, parameterAliases);
+            var val = ParseValue(m.Arguments[0], format, parameterAliases);
             return prop + " LIKE " + val;
         }
 
-        private string HandleLikeWithBrackets(MethodCallExpression m, string format)
+        private string HandleLikeWithBrackets(MethodCallExpression m, string format, Dictionary<ParameterExpression, string> parameterAliases = null)
         {
-            Expression propExpr;
-            Expression valueExpr;
-
-            if (m.Object != null)
-            {
-                propExpr = m.Object;
-                valueExpr = m.Arguments[0];
-            }
-            else
-            {
+            if (m.Object == null)
                 throw new NotSupportedException("LIKE requires instance method call on string.");
-            }
 
-            var prop = ParseMemberWithBrackets(propExpr);
-            var val = ParseValue(valueExpr, format);
-            return prop + " LIKE " + val;
-        }
-
-        private string HandleLike(MethodCallExpression m, string format, Dictionary<ParameterExpression, string> parameterAliases)
-        {
-            Expression propExpr;
-            Expression valueExpr;
-
-            if (m.Object != null)
-            {
-                propExpr = m.Object;
-                valueExpr = m.Arguments[0];
-            }
-            else
-            {
-                throw new NotSupportedException("LIKE requires instance method call on string.");
-            }
-
-            var prop = ParseMember(propExpr, parameterAliases);
-            var val = ParseValue(valueExpr, format, parameterAliases);
-            return prop + " LIKE " + val;
-        }
-
-        private string HandleLikeWithBrackets(MethodCallExpression m, string format, Dictionary<ParameterExpression, string> parameterAliases)
-        {
-            Expression propExpr;
-            Expression valueExpr;
-
-            if (m.Object != null)
-            {
-                propExpr = m.Object;
-                valueExpr = m.Arguments[0];
-            }
-            else
-            {
-                throw new NotSupportedException("LIKE requires instance method call on string.");
-            }
-
-            var prop = ParseMemberWithBrackets(propExpr, parameterAliases);
-            var val = ParseValue(valueExpr, format, parameterAliases);
+            var prop = ParseMemberWithBrackets(m.Object, parameterAliases);
+            var val = ParseValue(m.Arguments[0], format, parameterAliases);
             return prop + " LIKE " + val;
         }
 
@@ -1092,35 +804,53 @@ namespace EasyDapper
             var member = expression as MemberExpression;
             if (member != null)
             {
-                var columnName = ParseMemberWithBrackets(member);
-                var propertyName = member.Member.Name;
-                return $"{columnName} AS {propertyName}";
+                var tableAlias = GetTableAliasForMember(member);
+                var columnName = member.Member.Name;
+
+                // For subquery columns, don't use brackets
+                if (IsSubqueryAlias(tableAlias))
+                    return $"{tableAlias}.{columnName} AS {columnName}";
+
+                // For regular table columns, use brackets
+                return $"{tableAlias}.[{GetColumnName(member.Member as PropertyInfo)}] AS {columnName}";
             }
 
             // For other expression types, just parse without alias
             return ParseMemberWithBrackets(expression);
         }
 
-        private string ParseMember(Expression expression)
+        private string ParseMember(Expression expression, Dictionary<ParameterExpression, string> parameterAliases = null)
         {
             var unary = expression as UnaryExpression;
             if (unary != null)
-                return ParseMember(unary.Operand);
+            {
+                // برای UnaryExpression، مستقیماً از operand استفاده کن
+                return ParseMember(unary.Operand, parameterAliases);
+            }
 
             var member = expression as MemberExpression;
             if (member != null)
             {
                 if (member.Expression != null)
                 {
-                    var alias = ParseMember(member.Expression);
-                    return alias + "." + GetColumnName(member.Member as PropertyInfo);
+                    var tableAlias = GetTableAliasForMember(member, parameterAliases);
+                    var columnName = member.Member.Name;
+
+                    // For subquery columns, don't use brackets
+                    if (IsSubqueryAlias(tableAlias))
+                        return $"{tableAlias}.{columnName}";
+
+                    // For regular table columns, use brackets
+                    return $"{tableAlias}.[{GetColumnName(member.Member as PropertyInfo)}]";
                 }
-                return GetColumnName(member.Member as PropertyInfo);
+                return $"[{GetColumnName(member.Member as PropertyInfo)}]";
             }
 
             var parameter = expression as ParameterExpression;
             if (parameter != null)
             {
+                if (parameterAliases != null && parameterAliases.TryGetValue(parameter, out var alias))
+                    return alias;
                 return GetAliasForType(parameter.Type);
             }
 
@@ -1132,14 +862,8 @@ namespace EasyDapper
             var unary = expression as UnaryExpression;
             if (unary != null)
             {
-                // Parse the operand and ensure brackets are applied correctly
-                var operand = ParseMember(unary.Operand, parameterAliases);
-                if (operand.Contains("."))
-                {
-                    var parts = operand.Split('.');
-                    return parts[0] + ".[" + parts[1] + "]";
-                }
-                return "[" + operand + "]";
+                // برای UnaryExpression، مستقیماً از operand استفاده کن
+                return ParseMemberWithBrackets(unary.Operand, parameterAliases);
             }
 
             var member = expression as MemberExpression;
@@ -1147,68 +871,67 @@ namespace EasyDapper
             {
                 if (member.Expression != null)
                 {
-                    // Handle ParameterExpression for table alias
-                    var paramExpr = member.Expression as ParameterExpression;
-                    if (paramExpr != null && parameterAliases != null && parameterAliases.TryGetValue(paramExpr, out var alias))
-                    {
-                        // Use the provided alias for the parameter
-                        return alias + ".[" + GetColumnName(member.Member as PropertyInfo) + "]";
-                    }
+                    var tableAlias = GetTableAliasForMember(member, parameterAliases);
+                    var columnName = member.Member.Name;
 
-                    // Fallback to parsing the expression
-                    var tableAlias = ParseMemberWithBrackets(member.Expression, parameterAliases);
-                    return tableAlias + ".[" + GetColumnName(member.Member as PropertyInfo) + "]";
+                    // For subquery columns, don't use brackets
+                    if (IsSubqueryAlias(tableAlias))
+                        return $"{tableAlias}.{columnName}";
+
+                    // For regular table columns, use brackets
+                    return $"{tableAlias}.[{GetColumnName(member.Member as PropertyInfo)}]";
                 }
-                return "[" + GetColumnName(member.Member as PropertyInfo) + "]";
+                return $"[{GetColumnName(member.Member as PropertyInfo)}]";
             }
 
             var parameter = expression as ParameterExpression;
             if (parameter != null)
             {
-                // Check parameter aliases first
                 if (parameterAliases != null && parameterAliases.TryGetValue(parameter, out var alias))
-                {
                     return alias;
-                }
 
-                // Fallback to subquery or type alias
                 if (_subQueryTypeAliases.TryGetValue(parameter.Type, out var subQueryAlias))
-                {
                     return subQueryAlias;
-                }
-
                 return GetAliasForType(parameter.Type);
             }
 
             throw new NotSupportedException("Unsupported expression: " + expression);
         }
 
-        private string ParseMember(Expression expression, Dictionary<ParameterExpression, string> parameterAliases)
+        private string GetTableAliasForMember(MemberExpression member, Dictionary<ParameterExpression, string> parameterAliases = null)
         {
-            var unary = expression as UnaryExpression;
-            if (unary != null)
-                return ParseMember(unary.Operand, parameterAliases);
-
-            var member = expression as MemberExpression;
-            if (member != null)
+            // If the member's expression is a parameter, get its alias directly
+            if (member.Expression is ParameterExpression paramExpr)
             {
-                if (member.Expression != null)
-                {
-                    var alias = ParseMember(member.Expression, parameterAliases);
-                    return alias + "." + GetColumnName(member.Member as PropertyInfo);
-                }
-                return GetColumnName(member.Member as PropertyInfo);
-            }
-
-            var parameter = expression as ParameterExpression;
-            if (parameter != null)
-            {
-                if (parameterAliases.TryGetValue(parameter, out var alias))
+                if (parameterAliases != null && parameterAliases.TryGetValue(paramExpr, out var alias))
                     return alias;
-                return GetAliasForType(parameter.Type);
+
+                if (_subQueryTypeAliases.TryGetValue(paramExpr.Type, out var subQueryAlias))
+                    return subQueryAlias;
+
+                return GetAliasForType(paramExpr.Type);
             }
 
-            throw new NotSupportedException("Unsupported expression: " + expression);
+            // For nested expressions, recursively get the table alias
+            if (member.Expression is MemberExpression nestedMember)
+            {
+                return GetTableAliasForMember(nestedMember, parameterAliases);
+            }
+
+            // For other expression types, parse them to get the table alias
+            if (member.Expression != null)
+            {
+                return ParseMemberWithBrackets(member.Expression, parameterAliases);
+            }
+
+            // If no expression, it's a static member - this shouldn't happen in our context
+            return null;
+        }
+
+        private bool IsSubqueryAlias(string alias)
+        {
+            if (string.IsNullOrEmpty(alias)) return false;
+            return _subQueryTypeAliases.Values.Contains(alias);
         }
 
         private string ParseValue(Expression expression, string format = null, Dictionary<ParameterExpression, string> parameterAliases = null)
@@ -1342,7 +1065,6 @@ namespace EasyDapper
             int fromIndex = sql.IndexOf("FROM ", StringComparison.OrdinalIgnoreCase);
             if (fromIndex == -1) return 0;
 
-            // Find the end of the FROM clause (after any JOINs)
             int currentPos = fromIndex;
             while (true)
             {
@@ -1364,10 +1086,7 @@ namespace EasyDapper
                 int minPos = positions.Where(p => p != -1).DefaultIfEmpty(sql.Length).Min();
 
                 if (minPos == sql.Length)
-                {
-                    // No more clauses, insert at the end
                     return sql.Length;
-                }
 
                 // If it's a JOIN, move past it and continue
                 if (minPos == nextJoin || minPos == nextInnerJoin || minPos == nextLeftJoin ||
@@ -1407,8 +1126,20 @@ namespace EasyDapper
                 sql.IndexOf("ORDER BY ", startIndex, StringComparison.OrdinalIgnoreCase),
                 sql.IndexOf("HAVING ", startIndex, StringComparison.OrdinalIgnoreCase)
             };
-
             return positions.Where(p => p >= startIndex).DefaultIfEmpty(-1).Min();
+        }
+
+        // Helper methods for reducing code duplication
+        private IQueryBuilder<T> SetClause(ref string clauseField, string value)
+        {
+            clauseField = value;
+            return this;
+        }
+
+        private IQueryBuilder<T> SetFlag(ref bool flagField, bool value)
+        {
+            flagField = value;
+            return this;
         }
         #endregion
 
@@ -1429,8 +1160,7 @@ namespace EasyDapper
             return ColumnNameCache.GetOrAdd(property, p =>
             {
                 var column = p.GetCustomAttribute<ColumnAttribute>();
-                var name = column != null ? column.ColumnName : p?.Name ?? string.Empty;
-                return name; // حذف براکت‌ها
+                return column != null ? column.ColumnName : p?.Name ?? string.Empty;
             });
         }
 
