@@ -34,6 +34,7 @@ namespace EasyDapper
         // Thread-safe mappings
         private readonly ConcurrentDictionary<string, string> _tableAliasMappings = new ConcurrentDictionary<string, string>();
         private readonly ConcurrentDictionary<Type, string> _typeAliasMappings = new ConcurrentDictionary<Type, string>();
+        private readonly ConcurrentDictionary<Type, string> _subQueryTypeAliases = new ConcurrentDictionary<Type, string>();
 
         // Instance fields (not volatile - each instance used by single thread)
         private string _rowNumberClause = string.Empty;
@@ -52,6 +53,7 @@ namespace EasyDapper
         private readonly string _defaultSchema = "dbo";
         private int _aliasCounter = 1;
         private int _paramCounter = 0;
+        private int _subQueryCounter = 1;
         private bool _disposed = false;
 
         // Thread-safe caches
@@ -265,6 +267,9 @@ namespace EasyDapper
             // Always create a new alias for the right table
             var rightAlias = GenerateAlias(rightTableName);
 
+            // Create a unique key for this join to avoid conflicts
+            var joinKey = $"{rightTableName}_{rightAlias}";
+
             // Temporarily store the right alias
             string prevRightAlias;
             bool hadPrevRight = _typeAliasMappings.TryGetValue(typeof(TRight), out prevRightAlias);
@@ -292,11 +297,12 @@ namespace EasyDapper
                 JoinType = joinType,
                 TableName = rightTableName,
                 Alias = rightAlias,
-                OnCondition = parsed
+                OnCondition = parsed,
+                JoinKey = joinKey
             });
 
             // Store the new alias for the right table
-            _tableAliasMappings.TryAdd(rightTableName + "_" + rightAlias, rightAlias);
+            _tableAliasMappings.TryAdd(joinKey, rightAlias);
         }
 
         public IQueryBuilder<T> CrossApply<TSubQuery>(Expression<Func<T, TSubQuery, bool>> onCondition, Func<IQueryBuilder<TSubQuery>, IQueryBuilder<TSubQuery>> subBuilder)
@@ -316,46 +322,61 @@ namespace EasyDapper
             var subQB = (QueryBuilder<TSubQuery>)qb;
             string subSql = subQB.BuildQuery();
 
-            // Get sub-query alias
-            string subMainAlias = subQB._typeAliasMappings.GetOrAdd(typeof(TSubQuery), _ => subQB.GenerateAlias(GetTableName(typeof(TSubQuery))));
+            // Get the alias for the main table of the subquery
+            string subMainAlias = subQB._typeAliasMappings.GetOrAdd(typeof(TSubQuery), _ => subQB.GenerateAlias(subQB.GetTableName(typeof(TSubQuery))));
 
-            // Temporarily register alias for condition parsing
-            string prev;
-            bool hadPrev = _typeAliasMappings.TryGetValue(typeof(TSubQuery), out prev);
-            _typeAliasMappings.TryAdd(typeof(TSubQuery), subMainAlias);
-
-            var onSql = ParseExpressionWithBrackets(onCondition.Body);
-
-            // Restore previous alias if existed
-            if (hadPrev) _typeAliasMappings.TryAdd(typeof(TSubQuery), prev);
-            else _typeAliasMappings.TryRemove(typeof(TSubQuery), out _);
-
-            // Append correlation condition to subSql
-            if (Regex.IsMatch(subSql, @"\bWHERE\b", RegexOptions.IgnoreCase))
-                subSql = Regex.Replace(subSql, @"\bWHERE\b", m => $"WHERE ({onSql}) AND", RegexOptions.IgnoreCase);
-            else
-                subSql += " WHERE " + onSql;
-
-            // Merge parameters with unique names
-            foreach (var kv in subQB._parameters)
+            // Create parameter mapping for the condition
+            var parameterAliases = new Dictionary<ParameterExpression, string>
             {
-                var newName = kv.Key;
-                if (_parameters.ContainsKey(newName))
+                { onCondition.Parameters[0], GetAliasForType(typeof(T)) }, // Main table alias
+                { onCondition.Parameters[1], subMainAlias } // Subquery table alias
+            };
+
+            // Parse the condition with parameter mapping
+            var onSql = ParseExpressionWithParameterMappingAndBrackets(onCondition.Body, parameterAliases);
+
+            // Check if subquery already has a WHERE clause
+            if (subSql.Contains("WHERE "))
+            {
+                // If it has WHERE, add the condition with AND
+                int whereIndex = subSql.IndexOf("WHERE ", StringComparison.OrdinalIgnoreCase);
+                int insertIndex = whereIndex + 6; // Length of "WHERE "
+
+                // Find the position of the next clause (GROUP BY, ORDER BY, HAVING)
+                int nextClauseIndex = FindNextClausePosition(subSql, insertIndex);
+
+                if (nextClauseIndex == -1)
                 {
-                    var fresh = GetUniqueParameterName();
-                    subSql = Regex.Replace(subSql, $@"(?<![A-Za-z0-9_]){Regex.Escape(newName)}(?![A-Za-z0-9_])", fresh);
-                    newName = fresh;
+                    // No next clause, append at the end
+                    subSql = subSql.Insert(insertIndex, "(" + onSql + ") AND ");
                 }
-                _parameters.TryAdd(newName, kv.Value);
+                else
+                {
+                    // Insert before the next clause
+                    subSql = subSql.Insert(insertIndex, "(" + onSql + ") AND ");
+                }
+            }
+            else
+            {
+                // No WHERE clause, find the right place to insert it
+                int insertIndex = FindWhereInsertPosition(subSql);
+                subSql = subSql.Insert(insertIndex, " WHERE " + onSql);
             }
 
-            var applyAlias = GenerateAlias(GetTableName(typeof(TSubQuery)));
+            // Merge parameters with unique names
+            MergeParameters(subQB._parameters);
+
+            var applyAlias = GenerateSubQueryAlias(GetTableName(typeof(TSubQuery)));
+
+            // Store the subquery type alias mapping
+            _subQueryTypeAliases.AddOrUpdate(typeof(TSubQuery), applyAlias, (k, v) => applyAlias);
+
             _applies.Enqueue(new ApplyInfo
             {
                 ApplyType = applyType,
-                SubQuery = $"({subSql}) AS {applyAlias}"
+                SubQuery = $"({subSql}) AS {applyAlias}",
+                SubQueryAlias = applyAlias
             });
-            _typeAliasMappings.TryAdd(typeof(TSubQuery), applyAlias);
         }
         #endregion
 
@@ -377,11 +398,17 @@ namespace EasyDapper
             if (other == null) throw new ArgumentNullException(nameof(other));
 
             var sql = (other as QueryBuilder<T>)?.BuildQuery() ?? other.BuildQuery();
-            var clause = $"{op} (" + sql + ")";
+            var clause = $"{op} ({sql})";
 
             if (isIntersect) _intersectClauses.Enqueue(clause);
             else if (isExcept) _exceptClauses.Enqueue(clause);
             else _unionClauses.Enqueue(clause);
+
+            // Merge parameters from the other query builder
+            if (other is QueryBuilder<T> otherQB)
+            {
+                MergeParameters(otherQB._parameters);
+            }
 
             return this;
         }
@@ -1100,15 +1127,75 @@ namespace EasyDapper
             throw new NotSupportedException("Unsupported expression: " + expression);
         }
 
-        private string ParseMemberWithBrackets(Expression expression)
+        private string ParseMemberWithBrackets(Expression expression, Dictionary<ParameterExpression, string> parameterAliases = null)
         {
-            var member = ParseMember(expression);
-            if (member.Contains("."))
+            var unary = expression as UnaryExpression;
+            if (unary != null)
             {
-                var parts = member.Split('.');
-                return parts[0] + ".[" + parts[1] + "]";
+                // For UnaryExpression, parse the operand without brackets to avoid recursion
+                var operand = ParseMember(unary.Operand, parameterAliases);
+                if (operand.Contains("."))
+                {
+                    var parts = operand.Split('.');
+                    return parts[0] + ".[" + parts[1] + "]";
+                }
+                return "[" + operand + "]";
             }
-            return "[" + member + "]";
+
+            var member = expression as MemberExpression;
+            if (member != null)
+            {
+                if (member.Expression != null)
+                {
+                    // Check if the member expression is a parameter that is mapped to a subquery alias
+                    var paramExpr = member.Expression as ParameterExpression;
+                    if (paramExpr != null)
+                    {
+                        // First check if we have a mapping for this parameter type to a subquery alias
+                        if (_subQueryTypeAliases.TryGetValue(paramExpr.Type, out var alias))
+                        {
+                            // For subquery columns, use the property name without brackets
+                            return alias + "." + member.Member.Name;
+                        }
+
+                        // Then check regular type aliases
+                        if (_typeAliasMappings.TryGetValue(paramExpr.Type, out alias))
+                        {
+                            // Check if this alias is a subquery alias (ends with _SQ)
+                            if (alias.EndsWith("_SQ"))
+                            {
+                                // For subquery columns, use the property name without brackets
+                                return alias + "." + member.Member.Name;
+                            }
+                        }
+                    }
+
+                    // For regular tables, use brackets
+                    var tableAlias = ParseMemberWithBrackets(member.Expression, parameterAliases);
+                    return tableAlias + ".[" + GetColumnName(member.Member as PropertyInfo) + "]";
+                }
+                return "[" + GetColumnName(member.Member as PropertyInfo) + "]";
+            }
+
+            var parameter = expression as ParameterExpression;
+            if (parameter != null)
+            {
+                // First check if we have a mapping for this parameter type to a subquery alias
+                if (_subQueryTypeAliases.TryGetValue(parameter.Type, out var alias))
+                {
+                    return alias;
+                }
+
+                // Then check regular type aliases
+                if (_typeAliasMappings.TryGetValue(parameter.Type, out alias))
+                {
+                    return alias;
+                }
+
+                return GetAliasForType(parameter.Type);
+            }
+
+            throw new NotSupportedException("Unsupported expression: " + expression);
         }
 
         private string ParseMember(Expression expression, Dictionary<ParameterExpression, string> parameterAliases)
@@ -1137,17 +1224,6 @@ namespace EasyDapper
             }
 
             throw new NotSupportedException("Unsupported expression: " + expression);
-        }
-
-        private string ParseMemberWithBrackets(Expression expression, Dictionary<ParameterExpression, string> parameterAliases)
-        {
-            var member = ParseMember(expression, parameterAliases);
-            if (member.Contains("."))
-            {
-                var parts = member.Split('.');
-                return parts[0] + ".[" + parts[1] + "]";
-            }
-            return "[" + member + "]";
         }
 
         private string ParseValue(Expression expression, string format = null, Dictionary<ParameterExpression, string> parameterAliases = null)
@@ -1242,6 +1318,115 @@ namespace EasyDapper
         }
         #endregion
 
+        #region Helper Methods
+        private string GenerateAlias(string tableName)
+        {
+            var shortName = tableName.Split('.').Last().Trim('[', ']');
+            if (shortName.Length > 10) shortName = shortName.Substring(0, 10);
+            var counter = Interlocked.Increment(ref _aliasCounter);
+            return $"{shortName}_A{counter}";
+        }
+
+        private string GenerateSubQueryAlias(string tableName)
+        {
+            var shortName = tableName.Split('.').Last().Trim('[', ']');
+            if (shortName.Length > 8) shortName = shortName.Substring(0, 8);
+            var counter = Interlocked.Increment(ref _subQueryCounter);
+            return $"{shortName}_SQ{counter}";
+        }
+
+        private void MergeParameters(ConcurrentDictionary<string, object> sourceParameters)
+        {
+            if (sourceParameters == null) return;
+
+            foreach (var kv in sourceParameters)
+            {
+                var newName = kv.Key;
+                if (_parameters.ContainsKey(newName))
+                {
+                    var fresh = GetUniqueParameterName();
+                    newName = fresh;
+                }
+                _parameters.TryAdd(newName, kv.Value);
+            }
+        }
+
+        private int FindWhereInsertPosition(string sql)
+        {
+            // Find the position after FROM and any JOINs
+            int fromIndex = sql.IndexOf("FROM ", StringComparison.OrdinalIgnoreCase);
+            if (fromIndex == -1) return 0;
+
+            // Find the end of the FROM clause (after any JOINs)
+            int currentPos = fromIndex;
+            while (true)
+            {
+                // Look for the next keyword that might follow FROM
+                int nextWhere = sql.IndexOf(" WHERE ", currentPos, StringComparison.OrdinalIgnoreCase);
+                int nextGroupBy = sql.IndexOf(" GROUP BY ", currentPos, StringComparison.OrdinalIgnoreCase);
+                int nextOrderBy = sql.IndexOf(" ORDER BY ", currentPos, StringComparison.OrdinalIgnoreCase);
+                int nextHaving = sql.IndexOf(" HAVING ", currentPos, StringComparison.OrdinalIgnoreCase);
+                int nextJoin = sql.IndexOf(" JOIN ", currentPos, StringComparison.OrdinalIgnoreCase);
+                int nextInnerJoin = sql.IndexOf(" INNER JOIN ", currentPos, StringComparison.OrdinalIgnoreCase);
+                int nextLeftJoin = sql.IndexOf(" LEFT JOIN ", currentPos, StringComparison.OrdinalIgnoreCase);
+                int nextRightJoin = sql.IndexOf(" RIGHT JOIN ", currentPos, StringComparison.OrdinalIgnoreCase);
+                int nextFullJoin = sql.IndexOf(" FULL JOIN ", currentPos, StringComparison.OrdinalIgnoreCase);
+                int nextCrossJoin = sql.IndexOf(" CROSS JOIN ", currentPos, StringComparison.OrdinalIgnoreCase);
+
+                // Find the minimum position among all these
+                int[] positions = { nextWhere, nextGroupBy, nextOrderBy, nextHaving, nextJoin, nextInnerJoin,
+                                   nextLeftJoin, nextRightJoin, nextFullJoin, nextCrossJoin };
+                int minPos = positions.Where(p => p != -1).DefaultIfEmpty(sql.Length).Min();
+
+                if (minPos == sql.Length)
+                {
+                    // No more clauses, insert at the end
+                    return sql.Length;
+                }
+
+                // If it's a JOIN, move past it and continue
+                if (minPos == nextJoin || minPos == nextInnerJoin || minPos == nextLeftJoin ||
+                    minPos == nextRightJoin || minPos == nextFullJoin || minPos == nextCrossJoin)
+                {
+                    // Find the end of this JOIN clause (after the ON condition)
+                    int onIndex = sql.IndexOf("ON ", minPos, StringComparison.OrdinalIgnoreCase);
+                    if (onIndex != -1)
+                    {
+                        // Find the end of the ON condition (next clause or end of string)
+                        int onEnd = FindNextClausePosition(sql, onIndex + 3);
+                        if (onEnd == -1)
+                            currentPos = sql.Length;
+                        else
+                            currentPos = onEnd;
+                        continue;
+                    }
+                    else
+                    {
+                        // No ON condition found, this is invalid SQL but we'll move past the JOIN
+                        currentPos = minPos + 4; // Length of "JOIN "
+                        continue;
+                    }
+                }
+                else
+                {
+                    // Found a non-JOIN clause, insert WHERE before it
+                    return minPos;
+                }
+            }
+        }
+
+        private int FindNextClausePosition(string sql, int startIndex)
+        {
+            int[] positions = {
+                sql.IndexOf("GROUP BY ", startIndex, StringComparison.OrdinalIgnoreCase),
+                sql.IndexOf("ORDER BY ", startIndex, StringComparison.OrdinalIgnoreCase),
+                sql.IndexOf("HAVING ", startIndex, StringComparison.OrdinalIgnoreCase)
+            };
+
+            return positions.Where(p => p >= startIndex).DefaultIfEmpty(-1).Min();
+        }
+        #endregion
+
         #region Metadata/Alias/Connection
         private string GetTableName(Type type)
         {
@@ -1262,14 +1447,6 @@ namespace EasyDapper
                 var name = column != null ? column.ColumnName : p?.Name ?? string.Empty;
                 return name; // حذف براکت‌ها
             });
-        }
-
-        private string GenerateAlias(string tableName)
-        {
-            var shortName = tableName.Split('.').Last().Trim('[', ']');
-            if (shortName.Length > 10) shortName = shortName.Substring(0, 10);
-            var counter = Interlocked.Increment(ref _aliasCounter);
-            return $"{shortName}_A{counter}";
         }
 
         private string GetAliasForTable(string tableName)
@@ -1316,12 +1493,14 @@ namespace EasyDapper
             public string TableName { get; set; }
             public string Alias { get; set; }
             public string OnCondition { get; set; }
+            public string JoinKey { get; set; }
         }
 
         private class ApplyInfo
         {
             public string ApplyType { get; set; }
             public string SubQuery { get; set; }
+            public string SubQueryAlias { get; set; }
         }
         #endregion
     }
