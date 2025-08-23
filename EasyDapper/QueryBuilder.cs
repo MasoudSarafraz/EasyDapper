@@ -264,28 +264,28 @@ namespace EasyDapper
                 return alias;
             });
 
-            // Always create a new alias for the right table
+            // Create a new alias for the right table
             var rightAlias = GenerateAlias(rightTableName);
 
             // Create a unique key for this join to avoid conflicts
             var joinKey = $"{rightTableName}_{rightAlias}";
 
-            // Temporarily store the right alias
+            // Store the right alias in type alias mappings
             string prevRightAlias;
             bool hadPrevRight = _typeAliasMappings.TryGetValue(typeof(TRight), out prevRightAlias);
-            _typeAliasMappings[typeof(TRight)] = rightAlias;
+            _typeAliasMappings.AddOrUpdate(typeof(TRight), rightAlias, (k, v) => rightAlias);
 
-            // Create parameter mapping
+            // Create parameter mapping for condition parsing
             var parameterAliases = new Dictionary<ParameterExpression, string>
-            {
-                { onCondition.Parameters[0], leftAlias },
-                { onCondition.Parameters[1], rightAlias }
-            };
+    {
+        { onCondition.Parameters[0], leftAlias }, // Left table alias
+        { onCondition.Parameters[1], rightAlias } // Right table alias
+    };
 
             // Parse the condition with parameter mapping
             var parsed = ParseExpressionWithParameterMappingAndBrackets(onCondition.Body, parameterAliases);
 
-            // Restore previous right alias if existed
+            // Restore previous right alias if it existed
             if (hadPrevRight)
                 _typeAliasMappings[typeof(TRight)] = prevRightAlias;
             else
@@ -1132,7 +1132,7 @@ namespace EasyDapper
             var unary = expression as UnaryExpression;
             if (unary != null)
             {
-                // For UnaryExpression, parse the operand without brackets to avoid recursion
+                // Parse the operand and ensure brackets are applied correctly
                 var operand = ParseMember(unary.Operand, parameterAliases);
                 if (operand.Contains("."))
                 {
@@ -1147,30 +1147,15 @@ namespace EasyDapper
             {
                 if (member.Expression != null)
                 {
-                    // Check if the member expression is a parameter that is mapped to a subquery alias
+                    // Handle ParameterExpression for table alias
                     var paramExpr = member.Expression as ParameterExpression;
-                    if (paramExpr != null)
+                    if (paramExpr != null && parameterAliases != null && parameterAliases.TryGetValue(paramExpr, out var alias))
                     {
-                        // First check if we have a mapping for this parameter type to a subquery alias
-                        if (_subQueryTypeAliases.TryGetValue(paramExpr.Type, out var alias))
-                        {
-                            // For subquery columns, use the property name without brackets
-                            return alias + "." + member.Member.Name;
-                        }
-
-                        // Then check regular type aliases
-                        if (_typeAliasMappings.TryGetValue(paramExpr.Type, out alias))
-                        {
-                            // Check if this alias is a subquery alias (ends with _SQ)
-                            if (alias.EndsWith("_SQ"))
-                            {
-                                // For subquery columns, use the property name without brackets
-                                return alias + "." + member.Member.Name;
-                            }
-                        }
+                        // Use the provided alias for the parameter
+                        return alias + ".[" + GetColumnName(member.Member as PropertyInfo) + "]";
                     }
 
-                    // For regular tables, use brackets
+                    // Fallback to parsing the expression
                     var tableAlias = ParseMemberWithBrackets(member.Expression, parameterAliases);
                     return tableAlias + ".[" + GetColumnName(member.Member as PropertyInfo) + "]";
                 }
@@ -1180,16 +1165,16 @@ namespace EasyDapper
             var parameter = expression as ParameterExpression;
             if (parameter != null)
             {
-                // First check if we have a mapping for this parameter type to a subquery alias
-                if (_subQueryTypeAliases.TryGetValue(parameter.Type, out var alias))
+                // Check parameter aliases first
+                if (parameterAliases != null && parameterAliases.TryGetValue(parameter, out var alias))
                 {
                     return alias;
                 }
 
-                // Then check regular type aliases
-                if (_typeAliasMappings.TryGetValue(parameter.Type, out alias))
+                // Fallback to subquery or type alias
+                if (_subQueryTypeAliases.TryGetValue(parameter.Type, out var subQueryAlias))
                 {
-                    return alias;
+                    return subQueryAlias;
                 }
 
                 return GetAliasForType(parameter.Type);
