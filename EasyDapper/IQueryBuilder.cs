@@ -15,6 +15,8 @@ namespace EasyDapper
         Task<IEnumerable<TResult>> ExecuteAsync<TResult>();
         IQueryBuilder<T> Select(params Expression<Func<T, object>>[] columns);
         IQueryBuilder<T> Select<TSource>(params Expression<Func<TSource, object>>[] columns);
+        IQueryBuilder<T> Select(Expression<Func<T, object>> columns);
+        IQueryBuilder<T> Select<TSource>(Expression<Func<TSource, object>> columns);
         IQueryBuilder<T> Count();
         IQueryBuilder<T> OrderBy(string orderByClause);
         IQueryBuilder<T> OrderByAscending(Expression<Func<T, object>> keySelector);

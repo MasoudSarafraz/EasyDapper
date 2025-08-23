@@ -110,6 +110,20 @@ namespace EasyDapper
             return this;
         }
 
+        public IQueryBuilder<T> Select(Expression<Func<T, object>> columns)
+        {
+            if (columns == null) return this;
+            _selectedColumnsQueue.Enqueue(ParseSelectMember(columns.Body));
+            return this;
+        }
+
+        public IQueryBuilder<T> Select<TSource>(Expression<Func<TSource, object>> columns)
+        {
+            if (columns == null) return this;
+            _selectedColumnsQueue.Enqueue(ParseSelectMember(columns.Body));
+            return this;
+        }
+
         public IQueryBuilder<T> Distinct() => SetClause(ref _distinctClause, "DISTINCT");
 
         public IQueryBuilder<T> Top(int count)
@@ -815,10 +829,38 @@ namespace EasyDapper
                 return $"{tableAlias}.[{GetColumnName(member.Member as PropertyInfo)}] AS {columnName}";
             }
 
+            // Handle anonymous types (NewExpression)
+            var newExpr = expression as NewExpression;
+            if (newExpr != null)
+            {
+                var columns = new List<string>();
+                for (int i = 0; i < newExpr.Arguments.Count; i++)
+                {
+                    var arg = newExpr.Arguments[i];
+                    var memberArg = arg as MemberExpression;
+                    if (memberArg != null)
+                    {
+                        var tableAlias = GetTableAliasForMember(memberArg);
+                        var columnName = memberArg.Member.Name;
+
+                        // For subquery columns, don't use brackets
+                        if (IsSubqueryAlias(tableAlias))
+                            columns.Add($"{tableAlias}.{columnName} AS {newExpr.Members[i].Name}");
+                        else
+                            columns.Add($"{tableAlias}.[{GetColumnName(memberArg.Member as PropertyInfo)}] AS {newExpr.Members[i].Name}");
+                    }
+                    else
+                    {
+                        // For other expression types, parse without alias
+                        columns.Add(ParseMemberWithBrackets(arg));
+                    }
+                }
+                return string.Join(", ", columns);
+            }
+
             // For other expression types, just parse without alias
             return ParseMemberWithBrackets(expression);
         }
-
         private string ParseMember(Expression expression, Dictionary<ParameterExpression, string> parameterAliases = null)
         {
             var unary = expression as UnaryExpression;
@@ -884,6 +926,35 @@ namespace EasyDapper
                 return $"[{GetColumnName(member.Member as PropertyInfo)}]";
             }
 
+            // Handle anonymous types (NewExpression)
+            var newExpr = expression as NewExpression;
+            if (newExpr != null)
+            {
+                var columns = new List<string>();
+                for (int i = 0; i < newExpr.Arguments.Count; i++)
+                {
+                    var arg = newExpr.Arguments[i];
+                    var memberArg = arg as MemberExpression;
+                    if (memberArg != null)
+                    {
+                        var tableAlias = GetTableAliasForMember(memberArg, parameterAliases);
+                        var columnName = memberArg.Member.Name;
+
+                        // For subquery columns, don't use brackets
+                        if (IsSubqueryAlias(tableAlias))
+                            columns.Add($"{tableAlias}.{columnName} AS {newExpr.Members[i].Name}");
+                        else
+                            columns.Add($"{tableAlias}.[{GetColumnName(memberArg.Member as PropertyInfo)}] AS {newExpr.Members[i].Name}");
+                    }
+                    else
+                    {
+                        // For other expression types, parse without alias
+                        columns.Add(ParseMemberWithBrackets(arg, parameterAliases));
+                    }
+                }
+                return string.Join(", ", columns);
+            }
+
             var parameter = expression as ParameterExpression;
             if (parameter != null)
             {
@@ -897,7 +968,6 @@ namespace EasyDapper
 
             throw new NotSupportedException("Unsupported expression: " + expression);
         }
-
         private string GetTableAliasForMember(MemberExpression member, Dictionary<ParameterExpression, string> parameterAliases = null)
         {
             // If the member's expression is a parameter, get its alias directly
