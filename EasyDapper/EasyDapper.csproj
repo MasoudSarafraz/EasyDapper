@@ -1,25 +1,28 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
 
 	<PropertyGroup>
-		<!-- Multi-targeting for .NET Framework and .NET Core -->
 		<TargetFrameworks>net45;netstandard2.0</TargetFrameworks>
 		<PackageId>SQLDapper.Easy</PackageId>
-		<Version>1.0.6</Version>
+		<PackageVersion>1.0.7</PackageVersion>
 		<Authors>Masoud Sarafraz</Authors>
 		<Description>A professional Dapper library with CRUD, dynamic queries, stored procedures, attributes, thread-safety, and transaction support.</Description>
 		<Title>Easy to use Dapper</Title>
 		<RepositoryUrl>https://github.com/MasoudSarafraz/EasyDapper.git</RepositoryUrl>
-		<GeneratePackageOnBuild>True</GeneratePackageOnBuild>
 		<PackageProjectUrl>https://github.com/MasoudSarafraz/EasyDapper.git</PackageProjectUrl>
+		<AssemblyVersion>1.0.7.0</AssemblyVersion>
+		<FileVersion>1.0.7.0</FileVersion>
+		<GeneratePackageOnBuild>true</GeneratePackageOnBuild>
+		<PackageLicenseExpression>MIT</PackageLicenseExpression>
 	</PropertyGroup>
-
 	<ItemGroup>
 		<PackageReference Include="Dapper" Version="1.50.2" />
 	</ItemGroup>
-
 	<ItemGroup Condition="'$(TargetFramework)' == 'net45'">
 		<Reference Include="System.Data" />
 		<Reference Include="System.Data.SqlClient" />
+	</ItemGroup>
+	<ItemGroup Condition="'$(TargetFramework)' == 'netstandard2.0'">
+		<PackageReference Include="System.Data.SqlClient" Version="4.8.5" />
 	</ItemGroup>
 
 </Project>
