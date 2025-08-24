@@ -16,7 +16,6 @@ namespace EasyDapper
     internal sealed class QueryBuilder<T> : IQueryBuilder<T>, IDisposable
     {
         private readonly Lazy<IDbConnection> _lazyConnection;
-        // Thread-safe collections for .NET 4.5
         private readonly ConcurrentQueue<string> _filters = new ConcurrentQueue<string>();
         private readonly ConcurrentDictionary<string, object> _parameters = new ConcurrentDictionary<string, object>();
         private readonly ConcurrentQueue<JoinInfo> _joins = new ConcurrentQueue<JoinInfo>();
@@ -79,6 +78,21 @@ namespace EasyDapper
             _tableAliasMappings.AddOrUpdate(tableName, customAlias, (k, v) => customAlias);
             return this;
         }
+
+        // --- اضافه شده: سربار WithTableAlias برای Type ---
+        public IQueryBuilder<T> WithTableAlias(Type tableType, string customAlias)
+        {
+            if (tableType == null) throw new ArgumentNullException(nameof(tableType));
+            if (string.IsNullOrEmpty(customAlias)) throw new ArgumentNullException(nameof(customAlias));
+            var tableName = GetTableName(tableType);
+            return WithTableAlias(tableName, customAlias); // فراخوانی سربار اصلی
+        }
+
+        public IQueryBuilder<T> WithTableAlias<TTable>(string customAlias)
+        {
+            return WithTableAlias(typeof(TTable), customAlias);
+        }
+        // --- پایان اضافه شده ---
 
         public IQueryBuilder<T> Where(Expression<Func<T, bool>> filter)
         {
@@ -233,9 +247,7 @@ namespace EasyDapper
         public IQueryBuilder<T> CustomJoin<TLeft, TRight>(string join, Expression<Func<TLeft, TRight, bool>> onCondition) =>
             AddJoin(join, onCondition);
 
-        // --- اصلاح شده: منطق Alias برای JOIN ---
-        // در کلاس QueryBuilder<T>
-
+        // --- اصلاح شده: منطق AddJoin برای Self-Join ---
         private IQueryBuilder<T> AddJoin<TLeft, TRight>(string joinType, Expression<Func<TLeft, TRight, bool>> onCondition)
         {
             var leftTableName = GetTableName(typeof(TLeft));
@@ -249,53 +261,47 @@ namespace EasyDapper
                 return alias;
             });
 
-            // --- اصلاح شده برای Self-Join ---
+            // --- اصلاح شده: تشخیص Self-Join و مدیریت Alias ---
             string rightAlias;
             bool isSelfJoin = typeof(TLeft) == typeof(TRight);
 
             if (isSelfJoin)
             {
-                // در Self-Join، همیشه یک alias جدید برای TRight ایجاد کن
+                // برای Self-Join، همیشه یک alias جدید ایجاد کن
                 rightAlias = GenerateAlias(rightTableName);
-                // نیازی به ذخیره این alias در _typeAliasMappings نیست چون نوع TLeft و TRight یکسان هستند
-                // و نباید alias جدید جایگزین alias اصلی شود.
-                // فقط برای این JOIN خاص از این alias جدید استفاده می‌کنیم.
+                // این alias را در typeAliasMappings ذخیره نکن تا alias اصلی نوع را تحت تأثیر قرار ندهد
+                // فقط برای این JOIN خاص استفاده می‌شود.
             }
             else
             {
-                // برای JOINهای غیر از Self-Join، از منطق قبلی استفاده کن
-                // بررسی کن آیا قبلاً برای این جدول یک alias ثابت تعریف شده (WithTableAlias)
+                // برای JOINهای غیر از Self-Join
+                // ابتدا بررسی WithTableAlias، سپس بررسی موجود بودن، سپس ایجاد جدید
                 if (_tableAliasMappings.TryGetValue(rightTableName, out rightAlias))
                 {
-                    // اگر بله، از همان alias برای این نوع استفاده کن
+                    // از alias سفارشی استفاده کن
                     _typeAliasMappings.AddOrUpdate(typeof(TRight), rightAlias, (k, v) => rightAlias);
                 }
-                else
+                else if (!_typeAliasMappings.TryGetValue(typeof(TRight), out rightAlias))
                 {
-                    // اگر خیر، بررسی کن آیا قبلاً برای این نوع (TRight) alias ساخته شده
-                    if (!_typeAliasMappings.TryGetValue(typeof(TRight), out rightAlias))
-                    {
-                        // اگر نه، یک alias جدید بساز
-                        rightAlias = GenerateAlias(rightTableName);
-                        // و آن را ذخیره کن
-                        _typeAliasMappings.TryAdd(typeof(TRight), rightAlias);
-                        _tableAliasMappings.TryAdd(rightTableName, rightAlias);
-                    }
-                    // اگر بله، rightAlias قبلاً مقداردهی شده است و از همان استفاده می‌کنیم
+                    // اگر alias وجود نداشت، یکی ایجاد کن و ذخیره کن
+                    rightAlias = GenerateAlias(rightTableName);
+                    _typeAliasMappings.TryAdd(typeof(TRight), rightAlias);
+                    _tableAliasMappings.TryAdd(rightTableName, rightAlias);
                 }
+                // اگر alias وجود داشت، rightAlias قبلاً مقداردهی شده است
             }
-            // --- پایان اصلاح برای Self-Join ---
+            // --- پایان اصلاح ---
 
-            // Create a unique key for this join (for tracking purposes, e.g., _tableAliasMappings)
-            // در Self-Join، از alias جدید استفاده می‌کنیم، پس joinKey هم باید منحصر به فرد باشد
-            var joinKey = isSelfJoin ? $"{rightTableName}_{rightAlias}" : $"{rightTableName}_{rightAlias}"; // می‌توان ساده‌تر هم کرد یا از Guid
+            // Create a unique key for this join (for tracking in _tableAliasMappings if needed)
+            // استفاده از Guid برای یکتایی بیشتر، به خصوص برای Self-Join
+            var joinKey = $"{rightTableName}_{Guid.NewGuid().ToString("N").Substring(0, 8)}";
 
             // Create parameter mapping for condition parsing
             var parameterAliases = new Dictionary<ParameterExpression, string>
-    {
-        { onCondition.Parameters[0], leftAlias },
-        { onCondition.Parameters[1], rightAlias }
-    };
+            {
+                { onCondition.Parameters[0], leftAlias },
+                { onCondition.Parameters[1], rightAlias }
+            };
 
             // Parse the condition with parameter mapping
             var parsed = ParseExpressionWithParameterMappingAndBrackets(onCondition.Body, parameterAliases);
@@ -305,13 +311,14 @@ namespace EasyDapper
             {
                 JoinType = joinType,
                 TableName = rightTableName,
-                Alias = rightAlias, // از rightAlias (جدید برای Self-Join یا مشترک برای دیگریان) استفاده می‌کنیم
+                Alias = rightAlias,
                 OnCondition = parsed,
                 JoinKey = joinKey
             });
 
-            // برای Self-Join، alias جدید را در _tableAliasMappings ذخیره نمی‌کنیم تا تداخلی ایجاد نکند
-            // برای غیر Self-Join، اگر قبلاً ذخیره نشده بود، ذخیره کن
+            // برای Self-Join، alias جدید را در tableAliasMappings ذخیره نکنید یا یک کلید منحصر به فرد استفاده کنید
+            // برای غیر Self-Join، اگر قبلاً ذخیره نشده بود، ذخیره کنید
+            // در اینجا، joinKey را برای ذخیره استفاده می‌کنیم تا تداخل نداشته باشد
             if (!isSelfJoin && !_tableAliasMappings.ContainsKey(joinKey))
             {
                 _tableAliasMappings.TryAdd(joinKey, rightAlias);
@@ -319,7 +326,7 @@ namespace EasyDapper
 
             return this;
         }
-        // --- پایان اصلاح ---
+        // --- پایان اصلاح شده ---
 
         public IQueryBuilder<T> CrossApply<TSubQuery>(Expression<Func<T, TSubQuery, bool>> onCondition, Func<IQueryBuilder<TSubQuery>, IQueryBuilder<TSubQuery>> subBuilder) =>
             AddApply("CROSS APPLY", onCondition, subBuilder);
@@ -1221,19 +1228,21 @@ namespace EasyDapper
             });
         }
 
+        // --- اصلاح شده: بررسی null بودن property ---
         private string GetColumnName(PropertyInfo property)
         {
-            // --- اصلاح شده: بررسی null بودن property ---
+            // بررسی null بودن property
             if (property == null)
-                throw new ArgumentNullException(nameof(property));
-            // --- پایان اصلاح ---
+                throw new ArgumentNullException(nameof(property), "PropertyInfo cannot be null.");
 
             return ColumnNameCache.GetOrAdd(property, p =>
             {
                 var column = p.GetCustomAttribute<ColumnAttribute>();
-                return column != null ? column.ColumnName : p.Name; // حذف string.Empty
+                // حذف string.Empty و استفاده از p.Name
+                return column != null ? column.ColumnName : p.Name;
             });
         }
+        // --- پایان اصلاح شده ---
 
         private string GetAliasForTable(string tableName)
         {
