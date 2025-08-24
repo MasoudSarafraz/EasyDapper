@@ -234,6 +234,8 @@ namespace EasyDapper
             AddJoin(join, onCondition);
 
         // --- اصلاح شده: منطق Alias برای JOIN ---
+        // در کلاس QueryBuilder<T>
+
         private IQueryBuilder<T> AddJoin<TLeft, TRight>(string joinType, Expression<Func<TLeft, TRight, bool>> onCondition)
         {
             var leftTableName = GetTableName(typeof(TLeft));
@@ -247,55 +249,73 @@ namespace EasyDapper
                 return alias;
             });
 
-            // --- اصلاح شده: بررسی کن آیا قبلاً برای TRight alias وجود دارد ---
+            // --- اصلاح شده برای Self-Join ---
             string rightAlias;
-            // ابتدا بررسی کن آیا قبلاً برای این جدول یک alias ثابت تعریف شده (WithTableAlias)
-            if (_tableAliasMappings.TryGetValue(rightTableName, out rightAlias))
+            bool isSelfJoin = typeof(TLeft) == typeof(TRight);
+
+            if (isSelfJoin)
             {
-                // اگر بله، از همان alias برای این نوع استفاده کن
-                _typeAliasMappings.AddOrUpdate(typeof(TRight), rightAlias, (k, v) => rightAlias);
+                // در Self-Join، همیشه یک alias جدید برای TRight ایجاد کن
+                rightAlias = GenerateAlias(rightTableName);
+                // نیازی به ذخیره این alias در _typeAliasMappings نیست چون نوع TLeft و TRight یکسان هستند
+                // و نباید alias جدید جایگزین alias اصلی شود.
+                // فقط برای این JOIN خاص از این alias جدید استفاده می‌کنیم.
             }
             else
             {
-                // اگر خیر، بررسی کن آیا قبلاً برای این نوع (TRight) alias ساخته شده
-                if (!_typeAliasMappings.TryGetValue(typeof(TRight), out rightAlias))
+                // برای JOINهای غیر از Self-Join، از منطق قبلی استفاده کن
+                // بررسی کن آیا قبلاً برای این جدول یک alias ثابت تعریف شده (WithTableAlias)
+                if (_tableAliasMappings.TryGetValue(rightTableName, out rightAlias))
                 {
-                    // اگر نه، یک alias جدید بساز
-                    rightAlias = GenerateAlias(rightTableName);
-                    // و آن را ذخیره کن
-                    _typeAliasMappings.TryAdd(typeof(TRight), rightAlias);
-                    _tableAliasMappings.TryAdd(rightTableName, rightAlias); // این خط هم اضافه شد تا tableAliasMappings هم به‌روز شود
+                    // اگر بله، از همان alias برای این نوع استفاده کن
+                    _typeAliasMappings.AddOrUpdate(typeof(TRight), rightAlias, (k, v) => rightAlias);
                 }
-                // اگر بله، rightAlias قبلاً مقداردهی شده است و از همان استفاده می‌کنیم
+                else
+                {
+                    // اگر خیر، بررسی کن آیا قبلاً برای این نوع (TRight) alias ساخته شده
+                    if (!_typeAliasMappings.TryGetValue(typeof(TRight), out rightAlias))
+                    {
+                        // اگر نه، یک alias جدید بساز
+                        rightAlias = GenerateAlias(rightTableName);
+                        // و آن را ذخیره کن
+                        _typeAliasMappings.TryAdd(typeof(TRight), rightAlias);
+                        _tableAliasMappings.TryAdd(rightTableName, rightAlias);
+                    }
+                    // اگر بله، rightAlias قبلاً مقداردهی شده است و از همان استفاده می‌کنیم
+                }
             }
-            // --- پایان اصلاح ---
+            // --- پایان اصلاح برای Self-Join ---
 
-            // Create a unique key for this join to avoid conflicts in _tableAliasMappings if needed for specific join tracking
-            // This part might need adjustment based on exact requirements, but alias reuse is handled above.
-            var joinKey = $"{rightTableName}_{rightAlias}"; // این خط ممکن است دیگر لازم نباشد اگر alias مشترک است
+            // Create a unique key for this join (for tracking purposes, e.g., _tableAliasMappings)
+            // در Self-Join، از alias جدید استفاده می‌کنیم، پس joinKey هم باید منحصر به فرد باشد
+            var joinKey = isSelfJoin ? $"{rightTableName}_{rightAlias}" : $"{rightTableName}_{rightAlias}"; // می‌توان ساده‌تر هم کرد یا از Guid
 
             // Create parameter mapping for condition parsing
             var parameterAliases = new Dictionary<ParameterExpression, string>
-            {
-                { onCondition.Parameters[0], leftAlias },
-                { onCondition.Parameters[1], rightAlias }
-            };
+    {
+        { onCondition.Parameters[0], leftAlias },
+        { onCondition.Parameters[1], rightAlias }
+    };
 
             // Parse the condition with parameter mapping
             var parsed = ParseExpressionWithParameterMappingAndBrackets(onCondition.Body, parameterAliases);
 
-            // Add join info (مطمئن شوید joinKey منطقی باشد یا اگر نیاز نیست حذف شود)
+            // Add join info
             _joins.Enqueue(new JoinInfo
             {
                 JoinType = joinType,
                 TableName = rightTableName,
-                Alias = rightAlias, // از rightAlias مشترک استفاده می‌کنیم
+                Alias = rightAlias, // از rightAlias (جدید برای Self-Join یا مشترک برای دیگریان) استفاده می‌کنیم
                 OnCondition = parsed,
-                JoinKey = joinKey // این ممکن است نیاز به بازنگری داشته باشد
+                JoinKey = joinKey
             });
 
-            // این خط ممکن است دیگر لازم نباشد یا باید با دقت بیشتری مدیریت شود
-            // _tableAliasMappings.TryAdd(joinKey, rightAlias);
+            // برای Self-Join، alias جدید را در _tableAliasMappings ذخیره نمی‌کنیم تا تداخلی ایجاد نکند
+            // برای غیر Self-Join، اگر قبلاً ذخیره نشده بود، ذخیره کن
+            if (!isSelfJoin && !_tableAliasMappings.ContainsKey(joinKey))
+            {
+                _tableAliasMappings.TryAdd(joinKey, rightAlias);
+            }
 
             return this;
         }
