@@ -13,6 +13,7 @@
 		<FileVersion>1.0.7.0</FileVersion>
 		<GeneratePackageOnBuild>true</GeneratePackageOnBuild>
 		<PackageLicenseExpression>MIT</PackageLicenseExpression>
+		<Version>1.0.7</Version>
 	</PropertyGroup>
 	<ItemGroup>
 		<PackageReference Include="Dapper" Version="1.50.2" />
