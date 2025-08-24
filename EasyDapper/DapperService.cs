@@ -14,116 +14,147 @@ using System.Text.RegularExpressions;
 using System.Data.Common;
 using System.Collections;
 
-
 namespace EasyDapper
 {
     internal sealed class DapperService : IDapperService, IDisposable
     {
+        // تغییر: اتصال Lazy را مستقیماً نگه می‌داریم تا از اتصال بیرونی جدا باشد.
+        private readonly string _connectionString;
         private readonly IDbConnection _externalConnection;
-        private readonly Lazy<IDbConnection> _lazyConnection;
-        private IDbTransaction _transaction;
-        private int _transactionCount = 0;
-        private readonly Stack<string> _savePoints = new Stack<string>();
+        private readonly ThreadLocal<IDbConnection> _threadLocalConnection;
+        private readonly ThreadLocal<IDbTransaction> _threadLocalTransaction;
+        private readonly ThreadLocal<int> _threadLocalTransactionCount;
+        private readonly ThreadLocal<Stack<string>> _threadLocalSavePoints;
+
+        // حفظ کش‌های استاتیک برای thread-safety
         private static readonly ConcurrentDictionary<Type, string> InsertQueryCache = new ConcurrentDictionary<Type, string>();
         private static readonly ConcurrentDictionary<Type, string> UpdateQueryCache = new ConcurrentDictionary<Type, string>();
         private static readonly ConcurrentDictionary<Type, string> DeleteQueryCache = new ConcurrentDictionary<Type, string>();
         private static readonly ConcurrentDictionary<Type, string> GetByIdQueryCache = new ConcurrentDictionary<Type, string>();
         private static readonly ConcurrentDictionary<Type, string> BulkInsertQueryCache = new ConcurrentDictionary<Type, string>();
-        private readonly ConcurrentDictionary<Type, List<PropertyInfo>> _primaryKeyCache = new ConcurrentDictionary<Type, List<PropertyInfo>>();
+        private static readonly ConcurrentDictionary<Type, List<PropertyInfo>> PrimaryKeyCache = new ConcurrentDictionary<Type, List<PropertyInfo>>();
+
+        // تغییر: استفاده از ConcurrentDictionary برای ذخیره‌سازی موجودیت‌های Attach شده به صورت thread-safe
         private readonly ConcurrentDictionary<object, object> _attachedEntities = new ConcurrentDictionary<object, object>();
+
         private int BATCH_SIZE = 100;
         private int _timeOut;
         private string defualtSchema = "dbo";
-        public int TransactionCount() => _transactionCount;
+
+        public int TransactionCount()
+        {
+            // تغییر: بازگرداندن تعداد تراکنش‌ها برای نخ جاری
+            return _threadLocalTransactionCount.Value;
+        }
+
         public DapperService(string connectionString)
         {
-            _lazyConnection = new Lazy<IDbConnection>(() => new SqlConnection(connectionString));
-            _timeOut = _lazyConnection.Value.ConnectionTimeout;
+            _connectionString = connectionString ?? throw new ArgumentNullException(nameof(connectionString));
+            // تغییر: استفاده از ThreadLocal برای متغیرهای مرتبط با تراکنش و اتصال
+            _threadLocalConnection = new ThreadLocal<IDbConnection>(() => new SqlConnection(_connectionString));
+            _threadLocalTransaction = new ThreadLocal<IDbTransaction>();
+            _threadLocalTransactionCount = new ThreadLocal<int>(() => 0);
+            _threadLocalSavePoints = new ThreadLocal<Stack<string>>(() => new Stack<string>());
+            // تغییر: دریافت Timeout از اتصال جدید ایجاد شده
+            try
+            {
+                var tempConnection = new SqlConnection(_connectionString);
+                _timeOut = tempConnection.ConnectionTimeout;
+                tempConnection.Dispose();
+            }
+            catch
+            {
+                _timeOut = 30; // مقدار پیش‌فرض در صورت خطا
+            }
         }
+
         public DapperService(IDbConnection externalConnection)
         {
             _externalConnection = externalConnection ?? throw new ArgumentNullException(nameof(externalConnection));
-            _timeOut = _lazyConnection.Value.ConnectionTimeout;
+            // تغییر: دریافت Timeout از اتصال بیرونی
+            try
+            {
+                _timeOut = _externalConnection.ConnectionTimeout;
+            }
+            catch
+            {
+                _timeOut = 30; // مقدار پیش‌فرض در صورت خطا
+            }
+            // تغییر: استفاده از ThreadLocal برای متغیرهای مرتبط با تراکنش
+            _threadLocalTransaction = new ThreadLocal<IDbTransaction>();
+            _threadLocalTransactionCount = new ThreadLocal<int>(() => 0);
+            _threadLocalSavePoints = new ThreadLocal<Stack<string>>(() => new Stack<string>());
         }
+
         public void BeginTransaction()
         {
             var connection = GetOpenConnection();
-            if (_transaction == null)
+            if (_threadLocalTransaction.Value == null)
             {
-                _transaction = connection.BeginTransaction();
+                _threadLocalTransaction.Value = connection.BeginTransaction();
             }
             else
             {
-                var savePointName = $"SavePoint{_transactionCount}";
+                var savePointName = $"SavePoint{_threadLocalTransactionCount.Value}";
                 ExecuteTransactionCommand($"SAVE TRANSACTION {savePointName}");
-                _savePoints.Push(savePointName);
+                _threadLocalSavePoints.Value.Push(savePointName);
             }
-            _transactionCount++;
+            _threadLocalTransactionCount.Value++;
         }
+
         public void CommitTransaction()
         {
-            if (_transaction == null)
+            if (_threadLocalTransaction.Value == null)
             {
                 throw new InvalidOperationException("No transaction is in progress.");
             }
-            if (_transactionCount <= 0)
+            if (_threadLocalTransactionCount.Value <= 0)
             {
                 throw new InvalidOperationException("No active transactions to commit.");
             }
-            _transactionCount--;
-            if (_transactionCount == 0)
+            _threadLocalTransactionCount.Value--;
+            if (_threadLocalTransactionCount.Value == 0)
             {
-                _transaction.Commit();
+                _threadLocalTransaction.Value.Commit();
                 CleanupTransaction();
             }
             else
             {
-                _savePoints.Pop();
+                _threadLocalSavePoints.Value.Pop();
             }
         }
+
         public void RollbackTransaction()
         {
-            if (_transaction == null)
+            if (_threadLocalTransaction.Value == null)
             {
                 throw new InvalidOperationException("No transaction is in progress.");
             }
             try
             {
-                if (_transactionCount > 0)
+                if (_threadLocalTransactionCount.Value > 0)
                 {
-                    if (_savePoints.Count > 0)
+                    if (_threadLocalSavePoints.Value.Count > 0)
                     {
-                        var savePointName = _savePoints.Pop();
+                        var savePointName = _threadLocalSavePoints.Value.Pop();
                         ExecuteTransactionCommand($"ROLLBACK TRANSACTION {savePointName}");
                     }
                     else
                     {
-                        _transaction.Rollback();
+                        _threadLocalTransaction.Value.Rollback();
                     }
                 }
             }
             finally
             {
-                _transactionCount--;
-                if (_transactionCount == 0)
+                _threadLocalTransactionCount.Value--;
+                if (_threadLocalTransactionCount.Value == 0)
                 {
                     CleanupTransaction();
                 }
             }
         }
-        //public int Insert<T>(T entity) where T : class
-        //{
-        //    var connection = GetOpenConnection();
-        //    var query = InsertQueryCache.GetOrAdd(typeof(T), type =>
-        //    {
-        //        var tableName = GetTableName<T>();
-        //        var properties = GetInsertProperties<T>();
-        //        var columns = string.Join(", ", properties.Select(p => GetColumnName(p)));
-        //        var values = string.Join(", ", properties.Select(p => $"@{p.Name}"));
-        //        return $"INSERT INTO {tableName} ({columns}) VALUES ({values})";
-        //    });
-        //    return connection.Execute(query, entity, _transaction);
-        //}
+
         public int Insert<T>(T entity) where T : class
         {
             var connection = GetOpenConnection();
@@ -131,12 +162,13 @@ namespace EasyDapper
             var identityProp = GetIdentityProperty<T>();
             if (identityProp != null)
             {
-                var newId = connection.ExecuteScalar(query, entity, _transaction, _timeOut);
+                var newId = connection.ExecuteScalar(query, entity, _threadLocalTransaction.Value, _timeOut);
                 identityProp.SetValue(entity, Convert.ChangeType(newId, identityProp.PropertyType));
                 return 1;
             }
-            return connection.Execute(query, entity, _transaction);
+            return connection.Execute(query, entity, _threadLocalTransaction.Value, _timeOut);
         }
+
         public async Task<int> InsertAsync<T>(T entity) where T : class
         {
             var connection = await GetOpenConnectionAsync();
@@ -144,12 +176,13 @@ namespace EasyDapper
             var identityProp = GetIdentityProperty<T>();
             if (identityProp != null)
             {
-                var newId = await connection.ExecuteScalarAsync(query, entity, _transaction, _timeOut);
+                var newId = await connection.ExecuteScalarAsync(query, entity, _threadLocalTransaction.Value, _timeOut);
                 identityProp.SetValue(entity, Convert.ChangeType(newId, identityProp.PropertyType));
                 return 1;
             }
-            return await connection.ExecuteAsync(query, entity, _transaction);
+            return await connection.ExecuteAsync(query, entity, _threadLocalTransaction.Value, _timeOut);
         }
+
         public int InsertList<T>(IEnumerable<T> entities, bool generateIdentities = false) where T : class
         {
             var entityList = entities.ToList();
@@ -160,36 +193,35 @@ namespace EasyDapper
             {
                 for (int i = 0; i < entityList.Count; i += BATCH_SIZE)
                 {
-                    //var batch = entityList.Skip(i).Take(BATCH_SIZE).ToList();
                     var batch = entityList.GetRange(i, Math.Min(BATCH_SIZE, entityList.Count - i));
                     var query = BuildOptimizedBatchInsertQuery<T>(batch.Count);
                     var parameters = CreateOptimizedParameters(batch);
                     if (identityProp.PropertyType == typeof(int))
                     {
-                        var generatedIds = connection.Query<int>(query, parameters, _transaction, commandTimeout: _timeOut).ToList();
-                        Parallel.For(0, batch.Count, j =>
+                        var generatedIds = connection.Query<int>(query, parameters, _threadLocalTransaction.Value, commandTimeout: _timeOut).ToList();
+                        // تغییر: استفاده از حلقه ساده به جای Parallel.For برای سادگی و جلوگیری از مشکلات احتمالی در محیط‌های خاص
+                        for (int j = 0; j < batch.Count; j++)
                         {
                             identityProp.SetValue(batch[j], generatedIds[j]);
-                        });
+                        }
                     }
                     if (identityProp.PropertyType == typeof(long))
                     {
-                        var generatedIds = connection.Query<long>(query, parameters, _transaction, commandTimeout: _timeOut).ToList();
-                        Parallel.For(0, batch.Count, j =>
+                        var generatedIds = connection.Query<long>(query, parameters, _threadLocalTransaction.Value, commandTimeout: _timeOut).ToList();
+                        for (int j = 0; j < batch.Count; j++)
                         {
                             identityProp.SetValue(batch[j], generatedIds[j]);
-                        });
+                        }
                     }
                 }
             }
             else
             {
                 InsertBulkCopy(entities);
-                //var simpleQuery = BulkInsertQueryCache.GetOrAdd(typeof(T), BuildSimpleInsertQuery<T>);
-                //totalInserted += connection.Execute(simpleQuery, batch, _transaction, _timeOut);
             }
             return entityList.Count;
         }
+
         public async Task<int> InsertListAsync<T>(IEnumerable<T> entities, bool generateIdentities = false, CancellationToken cancellationToken = default) where T : class
         {
             var entityList = entities.ToList();
@@ -200,14 +232,13 @@ namespace EasyDapper
             {
                 for (int i = 0; i < entityList.Count; i += BATCH_SIZE)
                 {
-                    //var batch = entityList.Skip(i).Take(BATCH_SIZE).ToList();
                     var batch = entityList.GetRange(i, Math.Min(BATCH_SIZE, entityList.Count - i));
                     var query = BuildOptimizedBatchInsertQuery<T>(batch.Count);
                     var parameters = await CreateParametersAsync(batch);
                     var commandDefinition = new CommandDefinition(
                         commandText: query,
                         parameters: parameters,
-                        transaction: _transaction,
+                        transaction: _threadLocalTransaction.Value,
                         commandTimeout: _timeOut,
                         cancellationToken: cancellationToken
                     );
@@ -216,7 +247,7 @@ namespace EasyDapper
                         var generatedIds = (await connection.QueryAsync<int>(commandDefinition)).ToList();
                         for (int j = 0; j < batch.Count; j++)
                         {
-                            identityProp.SetValue(entityList[j], generatedIds[j]);
+                            identityProp.SetValue(batch[j], generatedIds[j]);
                         }
                     }
                     if (identityProp.PropertyType == typeof(long))
@@ -224,7 +255,7 @@ namespace EasyDapper
                         var generatedIds = (await connection.QueryAsync<long>(commandDefinition)).ToList();
                         for (int j = 0; j < batch.Count; j++)
                         {
-                            identityProp.SetValue(entityList[j], generatedIds[j]);
+                            identityProp.SetValue(batch[j], generatedIds[j]);
                         }
                     }
                 }
@@ -232,32 +263,17 @@ namespace EasyDapper
             else
             {
                 await InsertBulkCopyAsync(entities, cancellationToken);
-                //var simpleQuery = BulkInsertQueryCache.GetOrAdd(typeof(T), BuildSimpleInsertQuery<T>);
-                //var commandDefinition = new CommandDefinition(
-                //    commandText: simpleQuery,
-                //    parameters: batch,
-                //    transaction: _transaction,
-                //    commandTimeout: _timeOut,
-                //    cancellationToken: cancellationToken
-                //);
-                //totalInserted += await connection.ExecuteAsync(commandDefinition);
             }
             return entityList.Count;
         }
-        //public int Update<T>(T entity) where T : class
-        //{
-        //    var connection = GetOpenConnection();
-        //    var query = UpdateQueryCache.GetOrAdd(typeof(T), BuildUpdateQuery<T>);
-        //    return connection.Execute(query, entity, _transaction, _timeOut);
-        //}
+
         public int Update<T>(T entity) where T : class
         {
             var primaryKeys = GetPrimaryKeyProperties<T>().ToList();
             var key = CreateCompositeKey(entity, primaryKeys);
-            // اگر موجودیت Attach نشده بود از آپدیت عادی استفاده میکنیم
             if (!_attachedEntities.TryGetValue(key, out var original))
             {
-                return BaseUpdate(entity); // یا کوئری آپدیت کامل
+                return BaseUpdate(entity);
             }
             var changedProps = GetChangedProperties((T)original, entity);
             if (!changedProps.Any())
@@ -267,14 +283,9 @@ namespace EasyDapper
             var query = BuildDynamicUpdateQuery<T>(changedProps, primaryKeys);
             var parameters = BuildParameters(entity, primaryKeys, changedProps);
             var connection = GetOpenConnection();
-            return connection.Execute(query, parameters, _transaction, _timeOut);
+            return connection.Execute(query, parameters, _threadLocalTransaction.Value, _timeOut);
         }
-        //public async Task<int> UpdateAsync<T>(T entity) where T : class
-        //{
-        //    var connection = await GetOpenConnectionAsync();
-        //    var query = UpdateQueryCache.GetOrAdd(typeof(T), BuildUpdateQuery<T>);
-        //    return await connection.ExecuteAsync(query, entity, _transaction, _timeOut);
-        //}
+
         public async Task<int> UpdateAsync<T>(T entity) where T : class
         {
             var primaryKeys = GetPrimaryKeyProperties<T>().ToList();
@@ -291,14 +302,16 @@ namespace EasyDapper
             var query = BuildDynamicUpdateQuery<T>(changedProps, primaryKeys);
             var parameters = BuildParameters(entity, primaryKeys, changedProps);
             var connection = await GetOpenConnectionAsync();
-            return await connection.ExecuteAsync(query, parameters, _transaction, _timeOut);
+            return await connection.ExecuteAsync(query, parameters, _threadLocalTransaction.Value, _timeOut);
         }
+
         public int UpdateList<T>(IEnumerable<T> entities) where T : class
         {
             var connection = GetOpenConnection();
             var query = UpdateQueryCache.GetOrAdd(typeof(T), BuildUpdateQuery<T>);
-            return connection.Execute(query, entities, _transaction, _timeOut);
+            return connection.Execute(query, entities, _threadLocalTransaction.Value, _timeOut);
         }
+
         public async Task<int> UpdateListAsync<T>(IEnumerable<T> entities, CancellationToken cancellationToken = default) where T : class
         {
             var connection = await GetOpenConnectionAsync();
@@ -306,33 +319,37 @@ namespace EasyDapper
             var commandDefinition = new CommandDefinition(
                 commandText: query,
                 parameters: entities,
-                transaction: _transaction,
+                transaction: _threadLocalTransaction.Value,
                 commandTimeout: _timeOut,
                 cancellationToken: cancellationToken
             );
             return await connection.ExecuteAsync(commandDefinition);
         }
+
         public int Delete<T>(T entity) where T : class
         {
             var connection = GetOpenConnection();
             var query = DeleteQueryCache.GetOrAdd(typeof(T), BuildDeleteQuery<T>);
             var parameters = CreatePrimaryKeyParameters(entity);
-            return connection.Execute(query, parameters, _transaction, _timeOut);
+            return connection.Execute(query, parameters, _threadLocalTransaction.Value, _timeOut);
         }
+
         public async Task<int> DeleteAsync<T>(T entity) where T : class
         {
             var connection = await GetOpenConnectionAsync();
             var query = DeleteQueryCache.GetOrAdd(typeof(T), BuildDeleteQuery<T>);
             var parameters = CreatePrimaryKeyParameters(entity);
-            return await connection.ExecuteAsync(query, parameters, _transaction, _timeOut);
+            return await connection.ExecuteAsync(query, parameters, _threadLocalTransaction.Value, _timeOut);
         }
+
         public int DeleteList<T>(IEnumerable<T> entities) where T : class
         {
             var connection = GetOpenConnection();
             var query = DeleteQueryCache.GetOrAdd(typeof(T), BuildDeleteQuery<T>);
             var parameters = entities.Select(CreatePrimaryKeyParameters);
-            return connection.Execute(query, parameters, _transaction, _timeOut);
+            return connection.Execute(query, parameters, _threadLocalTransaction.Value, _timeOut);
         }
+
         public async Task<int> DeleteListAsync<T>(IEnumerable<T> entities, CancellationToken cancellationToken = default) where T : class
         {
             var connection = await GetOpenConnectionAsync();
@@ -341,24 +358,27 @@ namespace EasyDapper
             var commandDefinition = new CommandDefinition(
                 commandText: query,
                 parameters: parameters,
-                transaction: _transaction,
+                transaction: _threadLocalTransaction.Value,
                 commandTimeout: _timeOut,
                 cancellationToken: cancellationToken
             );
             return await connection.ExecuteAsync(commandDefinition);
         }
+
         public T GetById<T>(object id) where T : class
         {
             var connection = GetOpenConnection();
             var query = GetByIdQueryCache.GetOrAdd(typeof(T), BuildGetByIdQuery<T>);
-            return connection.QueryFirstOrDefault<T>(query, new { Id = id }, _transaction, _timeOut);
+            return connection.QueryFirstOrDefault<T>(query, new { Id = id }, _threadLocalTransaction.Value, _timeOut);
         }
+
         public async Task<T> GetByIdAsync<T>(object id) where T : class
         {
             var connection = await GetOpenConnectionAsync();
             var query = GetByIdQueryCache.GetOrAdd(typeof(T), BuildGetByIdQuery<T>);
-            return await connection.QueryFirstOrDefaultAsync<T>(query, new { Id = id }, _transaction, _timeOut);
+            return await connection.QueryFirstOrDefaultAsync<T>(query, new { Id = id }, _threadLocalTransaction.Value, _timeOut);
         }
+
         public T GetById<T>(T entity) where T : class
         {
             var connection = GetOpenConnection();
@@ -370,8 +390,9 @@ namespace EasyDapper
                 return $"SELECT {columns} FROM {tableName} WHERE {whereClause}";
             });
             var parameters = GetPrimaryKeyValues(entity);
-            return connection.QueryFirstOrDefault<T>(query, parameters, _transaction, _timeOut);
+            return connection.QueryFirstOrDefault<T>(query, parameters, _threadLocalTransaction.Value, _timeOut);
         }
+
         public async Task<T> GetByIdAsync<T>(T entity) where T : class
         {
             var connection = await GetOpenConnectionAsync();
@@ -384,48 +405,49 @@ namespace EasyDapper
                 var whereClause = string.Join(" AND ", primaryKeys.Select(p => $"{GetColumnName(p)} = @{p.Name}"));
                 return $"SELECT {columns} FROM {tableName} WHERE {whereClause}";
             });
-
             var parameters = GetPrimaryKeyProperties<T>().ToDictionary(p => p.Name, p => p.GetValue(entity));
-
-            return await connection.QueryFirstOrDefaultAsync<T>(query, parameters, _transaction, _timeOut);
+            return await connection.QueryFirstOrDefaultAsync<T>(query, parameters, _threadLocalTransaction.Value, _timeOut);
         }
+
         public IQueryBuilder<T> Query<T>()
         {
             if (_externalConnection != null)
             {
                 return new QueryBuilder<T>(_externalConnection);
             }
-            return new QueryBuilder<T>(_lazyConnection.Value);
+            // تغییر: استفاده از اتصال ThreadLocal
+            return new QueryBuilder<T>(_threadLocalConnection.Value);
         }
+
         public IEnumerable<T> ExecuteStoredProcedure<T>(string procedureName, object parameters = null) where T : class
         {
             IsValidProcedureName(procedureName);
             var openConnection = GetOpenConnection();
-            //openConnection.Open();
             return openConnection.Query<T>(
             procedureName,
             param: parameters,
-            transaction: _transaction,
+            transaction: _threadLocalTransaction.Value,
             commandTimeout: _timeOut,
             commandType: CommandType.StoredProcedure
             );
         }
+
         public async Task<IEnumerable<T>> ExecuteStoredProcedureAsync<T>(string procedureName, object parameters = null, CancellationToken cancellationToken = default) where T : class
         {
             IsValidProcedureName(procedureName);
             var openConnection = await GetOpenConnectionAsync();
-            //await connection.OpenAsync(cancellationToken).ConfigureAwait(false);
             return await openConnection.QueryAsync<T>(
             new CommandDefinition(
                 procedureName,
                 parameters,
-                transaction: _transaction,
+                transaction: _threadLocalTransaction.Value,
                 commandTimeout: _timeOut,
                 commandType: CommandType.StoredProcedure,
                 cancellationToken: cancellationToken
             )
             ).ConfigureAwait(false);
         }
+
         public T ExecuteMultiResultStoredProcedure<T>(string procedureName, Func<SqlMapper.GridReader, T> mapper, object parameters = null, IDbTransaction transaction = null, int? commandTimeout = null) where T : class
         {
             IsValidProcedureName(procedureName);
@@ -433,13 +455,14 @@ namespace EasyDapper
             using (var multi = openConnection.QueryMultiple(
                 procedureName,
                 parameters,
-                transaction,
+                transaction ?? _threadLocalTransaction.Value, // تغییر: استفاده از تراکنش ThreadLocal به عنوان پیش‌فرض
                 commandTimeout ?? _timeOut,
                 CommandType.StoredProcedure))
             {
                 return mapper(multi);
             }
         }
+
         public async Task<T> ExecuteMultiResultStoredProcedureAsync<T>(string procedureName, Func<SqlMapper.GridReader, Task<T>> asyncMapper, object parameters = null, IDbTransaction transaction = null, int? commandTimeout = null, CancellationToken cancellationToken = default) where T : class
         {
             IsValidProcedureName(procedureName);
@@ -448,7 +471,7 @@ namespace EasyDapper
                 new CommandDefinition(
                     procedureName,
                     parameters,
-                    transaction,
+                    transaction ?? _threadLocalTransaction.Value, // تغییر: استفاده از تراکنش ThreadLocal به عنوان پیش‌فرض
                     commandTimeout ?? _timeOut,
                     CommandType.StoredProcedure,
                     cancellationToken: cancellationToken
@@ -458,6 +481,7 @@ namespace EasyDapper
                 return await asyncMapper(multi).ConfigureAwait(false);
             }
         }
+
         public void Attach<T>(T entity) where T : class
         {
             var primaryKeys = GetPrimaryKeyProperties<T>().ToList();
@@ -468,12 +492,14 @@ namespace EasyDapper
                 _attachedEntities.TryAdd(key, clone);
             }
         }
+
         public void Detach<T>(T entity) where T : class
         {
             var primaryKeys = GetPrimaryKeyProperties<T>().ToList();
             var key = CreateCompositeKey(entity, primaryKeys);
             _attachedEntities.TryRemove(key, out _);
         }
+
         public T ExecuteScalarFunction<T>(string functionName, object parameters = null)
         {
             var connection = GetOpenConnection();
@@ -481,11 +507,12 @@ namespace EasyDapper
             var commandDefinition = new CommandDefinition(
                 commandText: query,
                 parameters: parameters,
-                transaction: _transaction,
+                transaction: _threadLocalTransaction.Value,
                 commandTimeout: _timeOut
             );
             return connection.ExecuteScalar<T>(commandDefinition);
         }
+
         public async Task<T> ExecuteScalarFunctionAsync<T>(string functionName, object parameters = null, CancellationToken cancellationToken = default)
         {
             var connection = await GetOpenConnectionAsync();
@@ -493,12 +520,13 @@ namespace EasyDapper
             var commandDefinition = new CommandDefinition(
                 commandText: query,
                 parameters: parameters,
-                transaction: _transaction,
+                transaction: _threadLocalTransaction.Value,
                 commandTimeout: _timeOut,
                 cancellationToken: cancellationToken
             );
             return await connection.ExecuteScalarAsync<T>(commandDefinition);
         }
+
         public IEnumerable<T> ExecuteTableFunction<T>(string functionName, object parameters)
         {
             var connection = GetOpenConnection();
@@ -506,11 +534,12 @@ namespace EasyDapper
             var commandDefinition = new CommandDefinition(
                 commandText: query,
                 parameters: parameters,
-                transaction: _transaction,
+                transaction: _threadLocalTransaction.Value,
                 commandTimeout: _timeOut
             );
             return connection.Query<T>(commandDefinition);
         }
+
         public async Task<IEnumerable<T>> ExecuteTableFunctionAsync<T>(string functionName, object parameters, CancellationToken cancellationToken = default)
         {
             var connection = await GetOpenConnectionAsync();
@@ -518,12 +547,13 @@ namespace EasyDapper
             var commandDefinition = new CommandDefinition(
                 commandText: query,
                 parameters: parameters,
-                transaction: _transaction,
+                transaction: _threadLocalTransaction.Value,
                 commandTimeout: _timeOut,
                 cancellationToken: cancellationToken
             );
             return await connection.QueryAsync<T>(commandDefinition);
         }
+
         private object CreateCompositeKey<T>(T entity, List<PropertyInfo> primaryKeys)
         {
             if (primaryKeys.Count == 1)
@@ -532,6 +562,7 @@ namespace EasyDapper
             }
             return primaryKeys.Select(p => p.GetValue(entity)).ToArray();
         }
+
         private string GetTableName<T>()
         {
             var tableAttr = typeof(T).GetCustomAttribute<TableAttribute>();
@@ -539,6 +570,7 @@ namespace EasyDapper
                 ? $"[{this.defualtSchema}].[{typeof(T).Name}]"
                 : $"[{tableAttr.Schema ?? this.defualtSchema}].[{tableAttr.TableName}]";
         }
+
         private string GetColumnName(PropertyInfo property)
         {
             var columnAttr = property.GetCustomAttribute<ColumnAttribute>();
@@ -546,20 +578,10 @@ namespace EasyDapper
                 ? $"[{property.Name}]"
                 : $"[{columnAttr.ColumnName}]";
         }
-        private IEnumerable<PropertyInfo> GetPrimaryKeyProperties<T>()
+
+        private List<PropertyInfo> GetPrimaryKeyProperties<T>()
         {
-            //var properties = typeof(T).GetProperties().Where(p => p.GetCustomAttribute<PrimaryKeyAttribute>() != null).ToList();
-            //if (properties.Count == 0)
-            //{
-            //    throw new InvalidOperationException($"No primary key defined for type {typeof(T).Name}");
-            //}
-            //var identityPk = properties.Count(p => p.GetCustomAttribute<IdentityAttribute>() != null);
-            //if (identityPk > 1)
-            //{
-            //    throw new InvalidOperationException("Multiple Identity primary keys are not supported");
-            //}
-            //return properties;
-            return _primaryKeyCache.GetOrAdd(typeof(T), type =>
+            return PrimaryKeyCache.GetOrAdd(typeof(T), type =>
             {
                 var properties = typeof(T).GetProperties()
                     .Where(p => p.GetCustomAttribute<PrimaryKeyAttribute>() != null)
@@ -576,6 +598,7 @@ namespace EasyDapper
                 return properties;
             });
         }
+
         private List<string> GetChangedProperties<T>(T original, T current)
         {
             return typeof(T).GetProperties()
@@ -583,6 +606,7 @@ namespace EasyDapper
                 .Select(p => p.Name)
                 .ToList();
         }
+
         private string BuildDynamicUpdateQuery<T>(List<string> changedProps, List<PropertyInfo> primaryKeys)
         {
             var tableName = GetTableName<T>();
@@ -594,6 +618,7 @@ namespace EasyDapper
             var whereClause = string.Join(" AND ", primaryKeys.Select(p => $"{GetColumnName(p)} = @pk_{p.Name}"));
             return $"UPDATE {tableName} SET {setClause} WHERE {whereClause}";
         }
+
         private DynamicParameters BuildParameters<T>(T entity, List<PropertyInfo> primaryKeys, List<string> changedProps)
         {
             var parameters = new DynamicParameters();
@@ -607,13 +632,13 @@ namespace EasyDapper
             }
             return parameters;
         }
+
         private T CloneEntity<T>(T entity)
         {
             var clone = Activator.CreateInstance<T>();
             foreach (var prop in typeof(T).GetProperties().Where(p => p.CanWrite))
             {
                 var value = prop.GetValue(entity);
-                // کلون کردن اشیا پیچیده
                 if (value != null && !prop.PropertyType.IsValueType && prop.PropertyType != typeof(string))
                 {
                     var cloneMethod = prop.PropertyType.GetMethod("MemberwiseClone", BindingFlags.NonPublic | BindingFlags.Instance);
@@ -626,23 +651,28 @@ namespace EasyDapper
             }
             return clone;
         }
+
         private int BaseUpdate<T>(T entity) where T : class
         {
             var connection = GetOpenConnection();
             var query = UpdateQueryCache.GetOrAdd(typeof(T), BuildUpdateQuery<T>);
-            return connection.Execute(query, entity, _transaction, _timeOut);
+            return connection.Execute(query, entity, _threadLocalTransaction.Value, _timeOut);
         }
+
         private async Task<int> BaseUpdateAsync<T>(T entity) where T : class
         {
             var connection = await GetOpenConnectionAsync();
             var query = UpdateQueryCache.GetOrAdd(typeof(T), BuildUpdateQuery<T>);
-            return await connection.ExecuteAsync(query, entity, _transaction, _timeOut);
+            return await connection.ExecuteAsync(query, entity, _threadLocalTransaction.Value, _timeOut);
         }
+
         private bool IsPrimaryKey(PropertyInfo property) => property.GetCustomAttribute<PrimaryKeyAttribute>() != null;
+
         private IEnumerable<PropertyInfo> GetInsertProperties<T>()
         {
             return typeof(T).GetProperties().Where(p => p.GetCustomAttribute<IdentityAttribute>() == null);
         }
+
         internal IDbConnection GetOpenConnection()
         {
             if (_externalConnection != null)
@@ -653,13 +683,15 @@ namespace EasyDapper
                 }
                 return _externalConnection;
             }
-            var connection = _lazyConnection.Value;
+            // تغییر: استفاده از اتصال ThreadLocal
+            var connection = _threadLocalConnection.Value;
             if (connection.State != ConnectionState.Open)
             {
                 connection.Open();
             }
             return connection;
         }
+
         private async Task<IDbConnection> GetOpenConnectionAsync()
         {
             if (_externalConnection != null)
@@ -670,7 +702,8 @@ namespace EasyDapper
                 }
                 return _externalConnection;
             }
-            var connection = _lazyConnection.Value;
+            // تغییر: استفاده از اتصال ThreadLocal
+            var connection = _threadLocalConnection.Value;
             if (connection.State != ConnectionState.Open)
             {
                 if (connection is SqlConnection sqlConnection)
@@ -684,11 +717,13 @@ namespace EasyDapper
             }
             return connection;
         }
+
         private string BuildWhereClause<T>()
         {
             var primaryKeys = GetPrimaryKeyProperties<T>();
             return string.Join(" AND ", primaryKeys.Select(p => $"{GetColumnName(p)} = @{p.Name}"));
         }
+
         private DynamicParameters GetPrimaryKeyValues<T>(T entity)
         {
             var parameters = new DynamicParameters();
@@ -699,10 +734,12 @@ namespace EasyDapper
             }
             return parameters;
         }
+
         private string GetSelectColumns<T>()
         {
             return string.Join(", ", typeof(T).GetProperties().Select(p => $"{GetColumnName(p)} AS {p.Name}"));
         }
+
         private PropertyInfo GetIdentityProperty<T>()
         {
             return typeof(T).GetProperties()
@@ -710,34 +747,28 @@ namespace EasyDapper
                     p.GetCustomAttribute<IdentityAttribute>() != null &&
                     p.GetCustomAttribute<PrimaryKeyAttribute>() != null);
         }
+
         private void IsValidProcedureName(string procedureName)
         {
-            //if (string.IsNullOrWhiteSpace(procedureName))
-            //{
-            //    throw new ArgumentException(
-            //        "Procedure name cannot be null or whitespace.",
-            //        nameof(procedureName)
-            //    );
-            //}
             if (!Regex.IsMatch(procedureName, @"^[\w\d_]+\.[\w\d_]+$|^[\w\d_]+$"))
             {
                 throw new ArgumentException("Procedure name is not valid", nameof(procedureName));
             }
         }
+
         private List<T> ValidateAndPrepareEntities<T>(IEnumerable<T> entities)
         {
             if (entities == null || !entities.Any())
                 throw new ArgumentException("Entities list cannot be null or empty", nameof(entities));
-
             return entities.ToList();
         }
+
         private string BuildInsertQuery<T>(Type type)
         {
             var tableName = GetTableName<T>();
             var properties = GetInsertProperties<T>();
             var columns = string.Join(", ", properties.Select(GetColumnName));
             var values = string.Join(", ", properties.Select(p => $"@{p.Name}"));
-
             var identityProp = GetIdentityProperty<T>();
             if (identityProp != null)
             {
@@ -745,9 +776,9 @@ namespace EasyDapper
                    VALUES ({values});
                    SELECT CAST(SCOPE_IDENTITY() AS INT);";
             }
-
             return $"INSERT INTO {tableName} ({columns}) VALUES ({values})";
         }
+
         private string BuildSimpleInsertQuery<T>(Type type)
         {
             var tableName = GetTableName<T>();
@@ -756,6 +787,7 @@ namespace EasyDapper
             var values = string.Join(", ", properties.Select(p => $"@{p.Name}"));
             return $"INSERT INTO {tableName} ({columns}) VALUES ({values})";
         }
+
         private string BuildUpdateQuery<T>(Type type)
         {
             var tableName = GetTableName<T>();
@@ -765,6 +797,7 @@ namespace EasyDapper
             var whereClause = string.Join(" AND ", primaryKeys.Select(p => $"{GetColumnName(p)} = @{p.Name}"));
             return $"UPDATE {tableName} SET {setClause} WHERE {whereClause}";
         }
+
         private string BuildDeleteQuery<T>(Type type)
         {
             var tableName = GetTableName<T>();
@@ -772,6 +805,7 @@ namespace EasyDapper
             var whereClause = string.Join(" AND ", primaryKeys.Select(p => $"{GetColumnName(p)} = @{p.Name}"));
             return $"DELETE FROM {tableName} WHERE {whereClause}";
         }
+
         private string BuildGetByIdQuery<T>(Type type)
         {
             var tableName = GetTableName<T>();
@@ -779,6 +813,7 @@ namespace EasyDapper
             var columns = string.Join(", ", typeof(T).GetProperties().Select(p => $"{GetColumnName(p)} AS {p.Name}"));
             return $"SELECT {columns} FROM {tableName} WHERE {GetColumnName(primaryKey)} = @Id";
         }
+
         private DynamicParameters CreatePrimaryKeyParameters<T>(T entity)
         {
             var parameters = new DynamicParameters();
@@ -788,7 +823,8 @@ namespace EasyDapper
             }
             return parameters;
         }
-        private string BuildBatchInsertWithOutputQuery<T>()//از متاسفانه SQL 2016 به بعد ساپورت میشود
+
+        private string BuildBatchInsertWithOutputQuery<T>()
         {
             return InsertQueryCache.GetOrAdd(typeof(T), type =>
             {
@@ -809,6 +845,7 @@ namespace EasyDapper
                     SELECT Id FROM @InsertedRows;";
             });
         }
+
         private string GetSqlType(Type type)
         {
             if (type == typeof(int)) return "INT";
@@ -837,6 +874,7 @@ namespace EasyDapper
             }
             throw new NotSupportedException($"Type {type.Name} is not supported");
         }
+
         private string BuildOptimizedBatchInsertQuery<T>(int count)
         {
             var tableName = GetTableName<T>();
@@ -851,19 +889,17 @@ namespace EasyDapper
             }
             return $@"
                 DECLARE @InsertedRows TABLE (Id INT);
-        
                 INSERT INTO {tableName} ({columns})
                 OUTPUT INSERTED.{outputColumn} INTO @InsertedRows
                 {values}
-        
                 SELECT Id FROM @InsertedRows 
-                ORDER BY Id ASC;"; // حفظ ترتیب درج
+                ORDER BY Id ASC;";
         }
+
         private DynamicParameters CreateOptimizedParameters<T>(List<T> entities)
         {
             var parameters = new DynamicParameters();
             var properties = GetInsertProperties<T>().ToList();
-
             for (int i = 0; i < entities.Count; i++)
             {
                 foreach (var prop in properties)
@@ -871,22 +907,9 @@ namespace EasyDapper
                     parameters.Add($"p{i}_{prop.Name}", prop.GetValue(entities[i]));
                 }
             }
-
             return parameters;
         }
-        //private async Task<DynamicParameters> CreateParametersAsync<T>(List<T> entities)
-        //{
-        //    var parameters = new DynamicParameters();
-        //    var properties = GetInsertProperties<T>().ToList();
-        //    for (int i = 0; i < entities.Count; i++)
-        //    {
-        //        foreach (var prop in properties)
-        //        {
-        //            parameters.Add($"p{i}_{prop.Name}", prop.GetValue(entities[i]));
-        //        }
-        //    }
-        //    return parameters;
-        //}
+
         private async Task<DynamicParameters> CreateParametersAsync<T>(List<T> entities)
         {
             return await Task.Run(() =>
@@ -903,24 +926,27 @@ namespace EasyDapper
                 return parameters;
             });
         }
+
         private void ExecuteTransactionCommand(string commandText)
         {
-            using (var command = _transaction.Connection.CreateCommand())
+            using (var command = _threadLocalTransaction.Value.Connection.CreateCommand())
             {
-                command.Transaction = _transaction;
+                command.Transaction = _threadLocalTransaction.Value;
                 command.CommandText = commandText;
                 command.ExecuteNonQuery();
             }
         }
+
         private void ExecuteRawCommand(string commandText)
         {
             using (var command = GetOpenConnection().CreateCommand())
             {
-                command.Transaction = _transaction;
+                command.Transaction = _threadLocalTransaction.Value;
                 command.CommandText = commandText;
                 command.ExecuteNonQuery();
             }
         }
+
         private void InsertBulkCopy<T>(IEnumerable<T> entities) where T : class
         {
             var tableName = GetTableName<T>();
@@ -928,13 +954,14 @@ namespace EasyDapper
             var dataTable = ToDataTable(entities, properties);
             using (var reader = ConvertToDbDataReader(dataTable))
             {
-                using (var bulkCopy = new SqlBulkCopy((SqlConnection)GetOpenConnection(), SqlBulkCopyOptions.Default, (SqlTransaction)_transaction))
+                using (var bulkCopy = new SqlBulkCopy((SqlConnection)GetOpenConnection(), SqlBulkCopyOptions.Default, (SqlTransaction)_threadLocalTransaction.Value))
                 {
                     bulkCopy.DestinationTableName = tableName;
                     bulkCopy.WriteToServer(reader);
                 }
             }
         }
+
         private async Task InsertBulkCopyAsync<T>(IEnumerable<T> entities, CancellationToken cancellationToken = default) where T : class
         {
             var tableName = GetTableName<T>();
@@ -942,14 +969,15 @@ namespace EasyDapper
             var dataTable = ToDataTable(entities, properties);
             using (var reader = ConvertToDbDataReader(dataTable))
             {
-                using (var bulkCopy = new SqlBulkCopy((SqlConnection)GetOpenConnection(), SqlBulkCopyOptions.Default, (SqlTransaction)_transaction))
+                using (var bulkCopy = new SqlBulkCopy((SqlConnection)GetOpenConnection(), SqlBulkCopyOptions.Default, (SqlTransaction)_threadLocalTransaction.Value))
                 {
                     bulkCopy.DestinationTableName = tableName;
                     await bulkCopy.WriteToServerAsync(reader, cancellationToken);
                 }
             }
         }
-        private List<int> InsertBulkCopyWithIdentity<T>(IEnumerable<T> entities) where T : class//در اتصال کلید ها به موجودیت ها مشکل وجود داره، به همین دلیل فعلا استفاده نکردم
+
+        private List<int> InsertBulkCopyWithIdentity<T>(IEnumerable<T> entities) where T : class
         {
             var random = new Random().Next(10, 100000000);
             var tableName = GetTableName<T>();
@@ -962,7 +990,7 @@ namespace EasyDapper
             {
                 var createTempTableQuery = $@"SELECT TOP 0 {string.Join(", ", properties.Select(GetColumnName))} INTO {tempTableName} FROM {tableName};";
                 ExecuteRawCommand(createTempTableQuery);
-                using (var bulkCopy = new SqlBulkCopy(connection, SqlBulkCopyOptions.Default, (SqlTransaction)_transaction))
+                using (var bulkCopy = new SqlBulkCopy(connection, SqlBulkCopyOptions.Default, (SqlTransaction)_threadLocalTransaction.Value))
                 {
                     bulkCopy.DestinationTableName = tempTableName;
                     var dataTable = ToDataTable(entities, properties);
@@ -974,7 +1002,7 @@ namespace EasyDapper
                     OUTPUT INSERTED.{GetColumnName(identityProp)}
                     SELECT {string.Join(", ", properties.Select(GetColumnName))}
                     FROM {tempTableName}";
-                identities = connection.Query<int>(insertAndRetrieveQuery, transaction: _transaction).ToList();
+                identities = connection.Query<int>(insertAndRetrieveQuery, transaction: _threadLocalTransaction.Value).ToList();
                 ExecuteRawCommand($"DROP TABLE {tempTableName}");
             }
             catch (Exception ex)
@@ -984,6 +1012,7 @@ namespace EasyDapper
             identities.Sort();
             return identities;
         }
+
         private DataTable ToDataTable<T>(IEnumerable<T> entities, IEnumerable<PropertyInfo> properties) where T : class
         {
             var dataTable = new DataTable();
@@ -1004,39 +1033,45 @@ namespace EasyDapper
             }
             return dataTable;
         }
+
         private DbDataReader ConvertToDbDataReader(DataTable dataTable)
         {
             return dataTable.CreateDataReader();
         }
+
         private string BuildTableFunctionQuery(string functionName, object parameters)
         {
             return $"SELECT * FROM {functionName}({BuildParameters(parameters)})";
         }
+
         private string BuildScalarFunctionQuery(string functionName, object parameters)
         {
             return $"SELECT {functionName}({BuildParameters(parameters)})";
         }
+
         private string BuildParameters(object parameters)
         {
             if (parameters == null) return "";
             return string.Join(", ", parameters.GetType().GetProperties().Select(p => $"@{p.Name}"));
         }
+
         private int GetSqlServerVersion()
         {
-            if (_lazyConnection == null || !_lazyConnection.IsValueCreated)
+            if (_connectionString == null)
             {
                 return 0;
             }
             try
             {
-                var connection = GetOpenConnection();
-                if (connection.State != ConnectionState.Open)
+                var tempConnection = new SqlConnection(_connectionString);
+                if (tempConnection.State != ConnectionState.Open)
                 {
-                    connection.Open();
+                    tempConnection.Open();
                 }
                 string versionQuery = "SELECT CAST(SERVERPROPERTY('ProductMajorVersion') AS NVARCHAR(128))";
-                var majorVersion = connection.QueryFirstOrDefault<string>(versionQuery);
-
+                var majorVersion = tempConnection.QueryFirstOrDefault<string>(versionQuery);
+                tempConnection.Close();
+                tempConnection.Dispose();
                 if (string.IsNullOrEmpty(majorVersion))
                 {
                     return 0;
@@ -1060,15 +1095,17 @@ namespace EasyDapper
                 return 0;
             }
         }
+
         private void CleanupTransaction()
         {
-            _transaction?.Dispose();
-            _transaction = null;
-            _savePoints.Clear();
+            _threadLocalTransaction.Value?.Dispose();
+            _threadLocalTransaction.Value = null;
+            _threadLocalSavePoints.Value.Clear();
         }
+
         public void Dispose()
         {
-            if (_transaction != null)
+            if (_threadLocalTransaction.Value != null)
             {
                 try
                 {
@@ -1079,10 +1116,14 @@ namespace EasyDapper
                     //Do Nothing
                 }
             }
-            if (_lazyConnection?.IsValueCreated == true)
+            if (_threadLocalConnection?.IsValueCreated == true)
             {
-                _lazyConnection.Value.Dispose();
+                _threadLocalConnection.Value.Dispose();
             }
+            _threadLocalConnection?.Dispose();
+            _threadLocalTransaction?.Dispose();
+            _threadLocalTransactionCount?.Dispose();
+            _threadLocalSavePoints?.Dispose();
         }
     }
 }
