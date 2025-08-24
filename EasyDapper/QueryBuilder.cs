@@ -16,7 +16,6 @@ namespace EasyDapper
     internal sealed class QueryBuilder<T> : IQueryBuilder<T>, IDisposable
     {
         private readonly Lazy<IDbConnection> _lazyConnection;
-
         // Thread-safe collections for .NET 4.5
         private readonly ConcurrentQueue<string> _filters = new ConcurrentQueue<string>();
         private readonly ConcurrentDictionary<string, object> _parameters = new ConcurrentDictionary<string, object>();
@@ -29,12 +28,10 @@ namespace EasyDapper
         private readonly ConcurrentQueue<string> _exceptClauses = new ConcurrentQueue<string>();
         private readonly ConcurrentQueue<string> _selectedColumnsQueue = new ConcurrentQueue<string>();
         private readonly ConcurrentQueue<string> _orderByQueue = new ConcurrentQueue<string>();
-
         // Thread-safe mappings
         private readonly ConcurrentDictionary<string, string> _tableAliasMappings = new ConcurrentDictionary<string, string>();
         private readonly ConcurrentDictionary<Type, string> _typeAliasMappings = new ConcurrentDictionary<Type, string>();
         private readonly ConcurrentDictionary<Type, string> _subQueryTypeAliases = new ConcurrentDictionary<Type, string>();
-
         // Instance fields
         private string _rowNumberClause = string.Empty;
         private string _havingClause = string.Empty;
@@ -42,23 +39,19 @@ namespace EasyDapper
         private string _distinctClause = string.Empty;
         private string _topClause = string.Empty;
         private bool _isCountQuery = false;
-
         // Nullable fields with lock
         private int? _limit = null;
         private int? _offset = null;
         private readonly object _pagingLock = new object();
-
         // Constants and counters
         private readonly string _defaultSchema = "dbo";
         private int _aliasCounter = 1;
         private int _paramCounter = 0;
         private int _subQueryCounter = 1;
         private bool _disposed = false;
-
         // Thread-safe caches
         private static readonly ConcurrentDictionary<Type, string> TableNameCache = new ConcurrentDictionary<Type, string>();
         private static readonly ConcurrentDictionary<MemberInfo, string> ColumnNameCache = new ConcurrentDictionary<MemberInfo, string>();
-
         // Concurrency limiter
         private static readonly SemaphoreSlim _connectionSemaphore = new SemaphoreSlim(Environment.ProcessorCount * 2, Environment.ProcessorCount * 2);
 
@@ -78,11 +71,11 @@ namespace EasyDapper
         }
 
         #region Public API - Selection/Filter
+
         public IQueryBuilder<T> WithTableAlias(string tableName, string customAlias)
         {
             if (string.IsNullOrEmpty(tableName) || string.IsNullOrEmpty(customAlias))
                 throw new ArgumentNullException("Table name and alias cannot be null or empty.");
-
             _tableAliasMappings.AddOrUpdate(tableName, customAlias, (k, v) => customAlias);
             return this;
         }
@@ -161,7 +154,6 @@ namespace EasyDapper
         {
             if (pageSize <= 0) throw new ArgumentException("Page size must be greater than zero.");
             if (pageNumber <= 0) throw new ArgumentException("Page number must be greater than zero.");
-
             lock (_pagingLock)
             {
                 _limit = pageSize;
@@ -169,9 +161,11 @@ namespace EasyDapper
             }
             return this;
         }
+
         #endregion
 
         #region Public API - Aggregates/Grouping/Having/RowNumber
+
         public IQueryBuilder<T> Sum(Expression<Func<T, object>> column, string alias = null) =>
             AddAggregate("SUM", column.Body, alias);
 
@@ -214,15 +208,16 @@ namespace EasyDapper
         {
             if (partitionBy == null) throw new ArgumentNullException(nameof(partitionBy));
             if (orderBy == null) throw new ArgumentNullException(nameof(orderBy));
-
             var parts = ExtractColumnListWithBrackets(partitionBy.Body);
             var orders = ExtractColumnListWithBrackets(orderBy.Body);
             _rowNumberClause = $"ROW_NUMBER() OVER (PARTITION BY {string.Join(", ", parts)} ORDER BY {string.Join(", ", orders)}) AS {alias}";
             return this;
         }
+
         #endregion
 
         #region Public API - Joins/Apply
+
         public IQueryBuilder<T> InnerJoin<TLeft, TRight>(Expression<Func<TLeft, TRight, bool>> onCondition) =>
             AddJoin("INNER JOIN", onCondition);
 
@@ -238,6 +233,7 @@ namespace EasyDapper
         public IQueryBuilder<T> CustomJoin<TLeft, TRight>(string join, Expression<Func<TLeft, TRight, bool>> onCondition) =>
             AddJoin(join, onCondition);
 
+        // --- اصلاح شده: منطق Alias برای JOIN ---
         private IQueryBuilder<T> AddJoin<TLeft, TRight>(string joinType, Expression<Func<TLeft, TRight, bool>> onCondition)
         {
             var leftTableName = GetTableName(typeof(TLeft));
@@ -251,16 +247,32 @@ namespace EasyDapper
                 return alias;
             });
 
-            // Create a new alias for the right table
-            var rightAlias = GenerateAlias(rightTableName);
+            // --- اصلاح شده: بررسی کن آیا قبلاً برای TRight alias وجود دارد ---
+            string rightAlias;
+            // ابتدا بررسی کن آیا قبلاً برای این جدول یک alias ثابت تعریف شده (WithTableAlias)
+            if (_tableAliasMappings.TryGetValue(rightTableName, out rightAlias))
+            {
+                // اگر بله، از همان alias برای این نوع استفاده کن
+                _typeAliasMappings.AddOrUpdate(typeof(TRight), rightAlias, (k, v) => rightAlias);
+            }
+            else
+            {
+                // اگر خیر، بررسی کن آیا قبلاً برای این نوع (TRight) alias ساخته شده
+                if (!_typeAliasMappings.TryGetValue(typeof(TRight), out rightAlias))
+                {
+                    // اگر نه، یک alias جدید بساز
+                    rightAlias = GenerateAlias(rightTableName);
+                    // و آن را ذخیره کن
+                    _typeAliasMappings.TryAdd(typeof(TRight), rightAlias);
+                    _tableAliasMappings.TryAdd(rightTableName, rightAlias); // این خط هم اضافه شد تا tableAliasMappings هم به‌روز شود
+                }
+                // اگر بله، rightAlias قبلاً مقداردهی شده است و از همان استفاده می‌کنیم
+            }
+            // --- پایان اصلاح ---
 
-            // Create a unique key for this join to avoid conflicts
-            var joinKey = $"{rightTableName}_{rightAlias}";
-
-            // Store the right alias in type alias mappings
-            string prevRightAlias;
-            bool hadPrevRight = _typeAliasMappings.TryGetValue(typeof(TRight), out prevRightAlias);
-            _typeAliasMappings.AddOrUpdate(typeof(TRight), rightAlias, (k, v) => rightAlias);
+            // Create a unique key for this join to avoid conflicts in _tableAliasMappings if needed for specific join tracking
+            // This part might need adjustment based on exact requirements, but alias reuse is handled above.
+            var joinKey = $"{rightTableName}_{rightAlias}"; // این خط ممکن است دیگر لازم نباشد اگر alias مشترک است
 
             // Create parameter mapping for condition parsing
             var parameterAliases = new Dictionary<ParameterExpression, string>
@@ -272,27 +284,22 @@ namespace EasyDapper
             // Parse the condition with parameter mapping
             var parsed = ParseExpressionWithParameterMappingAndBrackets(onCondition.Body, parameterAliases);
 
-            // Restore previous right alias if it existed
-            if (hadPrevRight)
-                _typeAliasMappings[typeof(TRight)] = prevRightAlias;
-            else
-                _typeAliasMappings.TryRemove(typeof(TRight), out _);
-
-            // Add join info
+            // Add join info (مطمئن شوید joinKey منطقی باشد یا اگر نیاز نیست حذف شود)
             _joins.Enqueue(new JoinInfo
             {
                 JoinType = joinType,
                 TableName = rightTableName,
-                Alias = rightAlias,
+                Alias = rightAlias, // از rightAlias مشترک استفاده می‌کنیم
                 OnCondition = parsed,
-                JoinKey = joinKey
+                JoinKey = joinKey // این ممکن است نیاز به بازنگری داشته باشد
             });
 
-            // Store the new alias for the right table
-            _tableAliasMappings.TryAdd(joinKey, rightAlias);
+            // این خط ممکن است دیگر لازم نباشد یا باید با دقت بیشتری مدیریت شود
+            // _tableAliasMappings.TryAdd(joinKey, rightAlias);
 
             return this;
         }
+        // --- پایان اصلاح ---
 
         public IQueryBuilder<T> CrossApply<TSubQuery>(Expression<Func<T, TSubQuery, bool>> onCondition, Func<IQueryBuilder<TSubQuery>, IQueryBuilder<TSubQuery>> subBuilder) =>
             AddApply("CROSS APPLY", onCondition, subBuilder);
@@ -303,7 +310,6 @@ namespace EasyDapper
         private IQueryBuilder<T> AddApply<TSubQuery>(string applyType, Expression<Func<T, TSubQuery, bool>> onCondition, Func<IQueryBuilder<TSubQuery>, IQueryBuilder<TSubQuery>> subBuilder)
         {
             if (subBuilder == null) throw new ArgumentNullException(nameof(subBuilder));
-
             var sub = new QueryBuilder<TSubQuery>(_lazyConnection.Value);
             var qb = subBuilder(sub);
             if (qb == null) throw new InvalidOperationException("Sub-query builder returned null");
@@ -329,7 +335,6 @@ namespace EasyDapper
                 // If it has WHERE, add the condition with AND
                 int whereIndex = subSql.IndexOf("WHERE ", StringComparison.OrdinalIgnoreCase);
                 int insertIndex = whereIndex + 6; // Length of "WHERE "
-
                 // Find the position of the next clause (GROUP BY, ORDER BY, HAVING)
                 int nextClauseIndex = FindNextClausePosition(subSql, insertIndex);
                 if (nextClauseIndex == -1)
@@ -348,7 +353,6 @@ namespace EasyDapper
             MergeParameters(subQB._parameters);
 
             var applyAlias = GenerateSubQueryAlias(GetTableName(typeof(TSubQuery)));
-
             // Store the subquery type alias mapping
             _subQueryTypeAliases.AddOrUpdate(typeof(TSubQuery), applyAlias, (k, v) => applyAlias);
 
@@ -358,12 +362,13 @@ namespace EasyDapper
                 SubQuery = $"({subSql}) AS {applyAlias}",
                 SubQueryAlias = applyAlias
             });
-
             return this;
         }
+
         #endregion
 
         #region Public API - Set Operations
+
         public IQueryBuilder<T> Union(IQueryBuilder<T> other) => AddSet("UNION", other);
         public IQueryBuilder<T> UnionAll(IQueryBuilder<T> other) => AddSet("UNION ALL", other);
         public IQueryBuilder<T> Intersect(IQueryBuilder<T> other) => AddSet("INTERSECT", other, isIntersect: true);
@@ -372,10 +377,8 @@ namespace EasyDapper
         private IQueryBuilder<T> AddSet(string op, IQueryBuilder<T> other, bool isIntersect = false, bool isExcept = false)
         {
             if (other == null) throw new ArgumentNullException(nameof(other));
-
             var sql = (other as QueryBuilder<T>)?.BuildQuery() ?? other.BuildQuery();
             var clause = $"{op} ({sql})";
-
             if (isIntersect) _intersectClauses.Enqueue(clause);
             else if (isExcept) _exceptClauses.Enqueue(clause);
             else _unionClauses.Enqueue(clause);
@@ -386,9 +389,11 @@ namespace EasyDapper
 
             return this;
         }
+
         #endregion
 
         #region Public API - Execution/Utility
+
         public IEnumerable<T> Execute() =>
             GetOpenConnection().Query<T>(BuildQuery(), _parameters, commandTimeout: _timeOut);
 
@@ -424,13 +429,14 @@ namespace EasyDapper
         }
 
         public string GetRawSql() => BuildQuery();
+
         #endregion
 
         #region Build Query
+
         public string BuildQuery()
         {
             ValidateAggregates();
-
             var selectClause = BuildSelectClause();
             var fromClause = BuildFromClause();
             var joinClauses = BuildJoinClauses();
@@ -446,17 +452,14 @@ namespace EasyDapper
               .Append(fromClause)
               .Append(joinClauses)
               .Append(applyClauses);
-
             if (!string.IsNullOrEmpty(whereClause)) sb.Append(' ').Append(whereClause);
             if (!string.IsNullOrEmpty(groupByClause)) sb.Append(' ').Append(groupByClause);
             if (!string.IsNullOrEmpty(havingClause)) sb.Append(' ').Append(havingClause);
             if (!string.IsNullOrEmpty(orderByClause)) sb.Append(' ').Append(orderByClause);
             if (!string.IsNullOrEmpty(paginationClause)) sb.Append(' ').Append(paginationClause);
-
             foreach (var u in _unionClauses) sb.Append(' ').Append(u);
             foreach (var i in _intersectClauses) sb.Append(' ').Append(i);
             foreach (var e in _exceptClauses) sb.Append(' ').Append(e);
-
             return sb.ToString();
         }
 
@@ -486,7 +489,6 @@ namespace EasyDapper
             if (!string.IsNullOrEmpty(_distinctClause)) result.Append(' ').Append(_distinctClause);
             if (!string.IsNullOrEmpty(_topClause)) result.Append(' ').Append(_topClause);
             if (!string.IsNullOrEmpty(columns)) result.Append(' ').Append(columns);
-
             return result.ToString();
         }
 
@@ -518,8 +520,11 @@ namespace EasyDapper
         }
 
         private string BuildWhereClause() => _filters.Any() ? "WHERE " + string.Join(" AND ", _filters.ToArray()) : string.Empty;
+
         private string BuildGroupByClause() => _groupByColumns.Any() ? "GROUP BY " + string.Join(", ", _groupByColumns.ToArray()) : string.Empty;
+
         private string BuildHavingClause() => !string.IsNullOrEmpty(_havingClause) ? "HAVING " + _havingClause : string.Empty;
+
         private string BuildOrderByClause() => _orderByQueue.Any() ? "ORDER BY " + string.Join(", ", _orderByQueue.ToArray()) : string.Empty;
 
         private string BuildPaginationClause(string orderByClause)
@@ -530,7 +535,6 @@ namespace EasyDapper
                 limit = _limit;
                 offset = _offset;
             }
-
             if (limit.HasValue)
             {
                 if (string.IsNullOrEmpty(orderByClause))
@@ -542,9 +546,11 @@ namespace EasyDapper
             }
             return string.Empty;
         }
+
         #endregion
 
         #region Parsing
+
         private List<string> ExtractColumnList(Expression expr)
         {
             var list = new List<string>();
@@ -599,12 +605,10 @@ namespace EasyDapper
                     return useBrackets
                         ? HandleEqualWithBrackets((BinaryExpression)expression, parameterAliases)
                         : HandleEqual((BinaryExpression)expression, parameterAliases);
-
                 case ExpressionType.NotEqual:
                     return useBrackets
                         ? HandleNotEqualWithBrackets((BinaryExpression)expression, parameterAliases)
                         : HandleNotEqual((BinaryExpression)expression, parameterAliases);
-
                 case ExpressionType.GreaterThan:
                 case ExpressionType.LessThan:
                 case ExpressionType.GreaterThanOrEqual:
@@ -613,40 +617,31 @@ namespace EasyDapper
                     return useBrackets
                         ? HandleBinaryWithBrackets((BinaryExpression)expression, op, parameterAliases)
                         : HandleBinary((BinaryExpression)expression, op, parameterAliases);
-
                 case ExpressionType.AndAlso:
                     return "(" + ParseExpressionInternal(((BinaryExpression)expression).Left, useBrackets, parameterAliases) +
                            " AND " + ParseExpressionInternal(((BinaryExpression)expression).Right, useBrackets, parameterAliases) + ")";
-
                 case ExpressionType.OrElse:
                     return "(" + ParseExpressionInternal(((BinaryExpression)expression).Left, useBrackets, parameterAliases) +
                            " OR " + ParseExpressionInternal(((BinaryExpression)expression).Right, useBrackets, parameterAliases) + ")";
-
                 case ExpressionType.Not:
                     return "NOT (" + ParseExpressionInternal(((UnaryExpression)expression).Operand, useBrackets, parameterAliases) + ")";
-
                 case ExpressionType.Call:
                     return useBrackets
                         ? HandleMethodCallWithBrackets((MethodCallExpression)expression, parameterAliases)
                         : HandleMethodCall((MethodCallExpression)expression, parameterAliases);
-
                 case ExpressionType.MemberAccess:
                     return useBrackets
                         ? ParseMemberWithBrackets((MemberExpression)expression, parameterAliases)
                         : ParseMember((MemberExpression)expression, parameterAliases);
-
                 case ExpressionType.Constant:
                     return HandleConstant((ConstantExpression)expression);
-
                 case ExpressionType.Convert:
                     return ParseExpressionInternal(((UnaryExpression)expression).Operand, useBrackets, parameterAliases);
-
                 case ExpressionType.Parameter:
                     var paramExpr = (ParameterExpression)expression;
                     if (parameterAliases != null && parameterAliases.TryGetValue(paramExpr, out var alias))
                         return alias;
                     return GetAliasForType(paramExpr.Type);
-
                 default:
                     throw new NotSupportedException("Expression type '" + expression.NodeType + "' is not supported.");
             }
@@ -709,14 +704,12 @@ namespace EasyDapper
                 if (m.Method.Name == "EndsWith") return HandleLike(m, "%{0}", parameterAliases);
                 if (m.Method.Name == "Contains") return HandleLike(m, "%{0}%", parameterAliases);
             }
-
             if (m.Method.Name == "Contains" && m.Arguments.Count == 1)
             {
                 var memberExpr = m.Arguments[0];
                 var listObject = Evaluate(m.Object) as System.Collections.IEnumerable;
                 if (listObject == null)
                     throw new NotSupportedException("Unsupported Contains signature or non-constant collection.");
-
                 var memberSql = ParseMember(memberExpr, parameterAliases);
                 var items = new List<string>();
                 foreach (var item in listObject)
@@ -727,7 +720,6 @@ namespace EasyDapper
                 }
                 return memberSql + " IN (" + string.Join(",", items) + ")";
             }
-
             if (m.Method.Name == "Between" && m.Arguments.Count == 3)
             {
                 var property = ParseMember(m.Arguments[0], parameterAliases);
@@ -735,13 +727,11 @@ namespace EasyDapper
                 var upper = ParseValue(m.Arguments[2], parameterAliases: parameterAliases);
                 return property + " BETWEEN " + lower + " AND " + upper;
             }
-
             if (m.Method.Name == "IsNullOrEmpty" && m.Arguments.Count == 1 && m.Method.DeclaringType == typeof(string))
             {
                 var prop = ParseMember(m.Arguments[0], parameterAliases);
                 return "(" + prop + " IS NULL OR " + prop + " = '')";
             }
-
             throw new NotSupportedException("Method '" + m.Method.Name + "' is not supported.");
         }
 
@@ -753,14 +743,12 @@ namespace EasyDapper
                 if (m.Method.Name == "EndsWith") return HandleLikeWithBrackets(m, "%{0}", parameterAliases);
                 if (m.Method.Name == "Contains") return HandleLikeWithBrackets(m, "%{0}%", parameterAliases);
             }
-
             if (m.Method.Name == "Contains" && m.Arguments.Count == 1)
             {
                 var memberExpr = m.Arguments[0];
                 var listObject = Evaluate(m.Object) as System.Collections.IEnumerable;
                 if (listObject == null)
                     throw new NotSupportedException("Unsupported Contains signature or non-constant collection.");
-
                 var memberSql = ParseMemberWithBrackets(memberExpr, parameterAliases);
                 var items = new List<string>();
                 foreach (var item in listObject)
@@ -771,7 +759,6 @@ namespace EasyDapper
                 }
                 return memberSql + " IN (" + string.Join(",", items) + ")";
             }
-
             if (m.Method.Name == "Between" && m.Arguments.Count == 3)
             {
                 var property = ParseMemberWithBrackets(m.Arguments[0], parameterAliases);
@@ -779,13 +766,11 @@ namespace EasyDapper
                 var upper = ParseValue(m.Arguments[2], parameterAliases: parameterAliases);
                 return property + " BETWEEN " + lower + " AND " + upper;
             }
-
             if (m.Method.Name == "IsNullOrEmpty" && m.Arguments.Count == 1 && m.Method.DeclaringType == typeof(string))
             {
                 var prop = ParseMemberWithBrackets(m.Arguments[0], parameterAliases);
                 return "(" + prop + " IS NULL OR " + prop + " = '')";
             }
-
             throw new NotSupportedException("Method '" + m.Method.Name + "' is not supported.");
         }
 
@@ -793,7 +778,6 @@ namespace EasyDapper
         {
             if (m.Object == null)
                 throw new NotSupportedException("LIKE requires instance method call on string.");
-
             var prop = ParseMember(m.Object, parameterAliases);
             var val = ParseValue(m.Arguments[0], format, parameterAliases);
             return prop + " LIKE " + val;
@@ -803,7 +787,6 @@ namespace EasyDapper
         {
             if (m.Object == null)
                 throw new NotSupportedException("LIKE requires instance method call on string.");
-
             var prop = ParseMemberWithBrackets(m.Object, parameterAliases);
             var val = ParseValue(m.Arguments[0], format, parameterAliases);
             return prop + " LIKE " + val;
@@ -820,11 +803,9 @@ namespace EasyDapper
             {
                 var tableAlias = GetTableAliasForMember(member);
                 var columnName = member.Member.Name;
-
                 // For subquery columns, don't use brackets
                 if (IsSubqueryAlias(tableAlias))
                     return $"{tableAlias}.{columnName} AS {columnName}";
-
                 // For regular table columns, use brackets
                 return $"{tableAlias}.[{GetColumnName(member.Member as PropertyInfo)}] AS {columnName}";
             }
@@ -842,7 +823,6 @@ namespace EasyDapper
                     {
                         var tableAlias = GetTableAliasForMember(memberArg);
                         var columnName = memberArg.Member.Name;
-
                         // For subquery columns, don't use brackets
                         if (IsSubqueryAlias(tableAlias))
                             columns.Add($"{tableAlias}.{columnName} AS {newExpr.Members[i].Name}");
@@ -861,6 +841,7 @@ namespace EasyDapper
             // For other expression types, just parse without alias
             return ParseMemberWithBrackets(expression);
         }
+
         private string ParseMember(Expression expression, Dictionary<ParameterExpression, string> parameterAliases = null)
         {
             var unary = expression as UnaryExpression;
@@ -877,11 +858,9 @@ namespace EasyDapper
                 {
                     var tableAlias = GetTableAliasForMember(member, parameterAliases);
                     var columnName = member.Member.Name;
-
                     // For subquery columns, don't use brackets
                     if (IsSubqueryAlias(tableAlias))
                         return $"{tableAlias}.{columnName}";
-
                     // For regular table columns, use brackets
                     return $"{tableAlias}.[{GetColumnName(member.Member as PropertyInfo)}]";
                 }
@@ -915,11 +894,9 @@ namespace EasyDapper
                 {
                     var tableAlias = GetTableAliasForMember(member, parameterAliases);
                     var columnName = member.Member.Name;
-
                     // For subquery columns, don't use brackets
                     if (IsSubqueryAlias(tableAlias))
                         return $"{tableAlias}.{columnName}";
-
                     // For regular table columns, use brackets
                     return $"{tableAlias}.[{GetColumnName(member.Member as PropertyInfo)}]";
                 }
@@ -939,7 +916,6 @@ namespace EasyDapper
                     {
                         var tableAlias = GetTableAliasForMember(memberArg, parameterAliases);
                         var columnName = memberArg.Member.Name;
-
                         // For subquery columns, don't use brackets
                         if (IsSubqueryAlias(tableAlias))
                             columns.Add($"{tableAlias}.{columnName} AS {newExpr.Members[i].Name}");
@@ -960,7 +936,6 @@ namespace EasyDapper
             {
                 if (parameterAliases != null && parameterAliases.TryGetValue(parameter, out var alias))
                     return alias;
-
                 if (_subQueryTypeAliases.TryGetValue(parameter.Type, out var subQueryAlias))
                     return subQueryAlias;
                 return GetAliasForType(parameter.Type);
@@ -968,6 +943,7 @@ namespace EasyDapper
 
             throw new NotSupportedException("Unsupported expression: " + expression);
         }
+
         private string GetTableAliasForMember(MemberExpression member, Dictionary<ParameterExpression, string> parameterAliases = null)
         {
             // If the member's expression is a parameter, get its alias directly
@@ -975,10 +951,8 @@ namespace EasyDapper
             {
                 if (parameterAliases != null && parameterAliases.TryGetValue(paramExpr, out var alias))
                     return alias;
-
                 if (_subQueryTypeAliases.TryGetValue(paramExpr.Type, out var subQueryAlias))
                     return subQueryAlias;
-
                 return GetAliasForType(paramExpr.Type);
             }
 
@@ -1094,9 +1068,11 @@ namespace EasyDapper
             var c = expression as ConstantExpression;
             return c != null && c.Value == null;
         }
+
         #endregion
 
         #region Helper Methods
+
         private string GenerateAlias(string tableName)
         {
             var shortName = tableName.Split('.').Last().Trim('[', ']');
@@ -1116,7 +1092,6 @@ namespace EasyDapper
         private void MergeParameters(ConcurrentDictionary<string, object> sourceParameters)
         {
             if (sourceParameters == null) return;
-
             foreach (var kv in sourceParameters)
             {
                 var newName = kv.Key;
@@ -1134,7 +1109,6 @@ namespace EasyDapper
             // Find the position after FROM and any JOINs
             int fromIndex = sql.IndexOf("FROM ", StringComparison.OrdinalIgnoreCase);
             if (fromIndex == -1) return 0;
-
             int currentPos = fromIndex;
             while (true)
             {
@@ -1211,9 +1185,11 @@ namespace EasyDapper
             flagField = value;
             return this;
         }
+
         #endregion
 
         #region Metadata/Alias/Connection
+
         private string GetTableName(Type type)
         {
             return TableNameCache.GetOrAdd(type, t =>
@@ -1227,10 +1203,15 @@ namespace EasyDapper
 
         private string GetColumnName(PropertyInfo property)
         {
+            // --- اصلاح شده: بررسی null بودن property ---
+            if (property == null)
+                throw new ArgumentNullException(nameof(property));
+            // --- پایان اصلاح ---
+
             return ColumnNameCache.GetOrAdd(property, p =>
             {
                 var column = p.GetCustomAttribute<ColumnAttribute>();
-                return column != null ? column.ColumnName : p?.Name ?? string.Empty;
+                return column != null ? column.ColumnName : p.Name; // حذف string.Empty
             });
         }
 
@@ -1261,17 +1242,21 @@ namespace EasyDapper
                 connection.Open();
             return connection;
         }
+
         #endregion
 
         #region IDisposable
+
         public void Dispose()
         {
             if (_disposed) return;
             _disposed = true;
         }
+
         #endregion
 
         #region Nested Types
+
         private class JoinInfo
         {
             public string JoinType { get; set; }
@@ -1287,6 +1272,7 @@ namespace EasyDapper
             public string SubQuery { get; set; }
             public string SubQueryAlias { get; set; }
         }
+
         #endregion
     }
 }
