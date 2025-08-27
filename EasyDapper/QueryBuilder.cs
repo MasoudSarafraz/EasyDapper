@@ -169,8 +169,8 @@ namespace EasyDapper
 
         public IQueryBuilder<T> Paging(int pageSize, int pageNumber = 1)
         {
-            if (pageSize <= 0) throw new ArgumentException("Page size must be greater than zero.");
-            if (pageNumber <= 0) throw new ArgumentException("Page number must be greater than zero.");
+            if (pageSize <= 0) throw new ArgumentException("Page size must be greater than zero");
+            if (pageNumber <= 0) throw new ArgumentException("Page number must be greater than zero");
             lock (_pagingLock)
             {
                 _limit = pageSize;
@@ -574,8 +574,7 @@ namespace EasyDapper
                         ? HandleEqualWithBrackets((BinaryExpression)expression, parameterAliases)
                         : HandleEqual((BinaryExpression)expression, parameterAliases);
                 case ExpressionType.NotEqual:
-                    return useBrackets
-                        ? HandleNotEqualWithBrackets((BinaryExpression)expression, parameterAliases)
+                    return useBrackets? HandleNotEqualWithBrackets((BinaryExpression)expression, parameterAliases)
                         : HandleNotEqual((BinaryExpression)expression, parameterAliases);
                 case ExpressionType.GreaterThan:
                 case ExpressionType.LessThan:
@@ -586,13 +585,11 @@ namespace EasyDapper
                         ? HandleBinaryWithBrackets((BinaryExpression)expression, op, parameterAliases)
                         : HandleBinary((BinaryExpression)expression, op, parameterAliases);
                 case ExpressionType.AndAlso:
-                    return "(" + ParseExpressionInternal(((BinaryExpression)expression).Left, useBrackets, parameterAliases) +
-                           " AND " + ParseExpressionInternal(((BinaryExpression)expression).Right, useBrackets, parameterAliases) + ")";
+                    return "(" + ParseExpressionInternal(((BinaryExpression)expression).Left, useBrackets, parameterAliases) +" AND " + ParseExpressionInternal(((BinaryExpression)expression).Right, useBrackets, parameterAliases) + ")";
                 case ExpressionType.OrElse:
                     return "(" + ParseExpressionInternal(((BinaryExpression)expression).Left, useBrackets, parameterAliases) +
                            " OR " + ParseExpressionInternal(((BinaryExpression)expression).Right, useBrackets, parameterAliases) + ")";
-                case ExpressionType.Not:
-                    return "NOT (" + ParseExpressionInternal(((UnaryExpression)expression).Operand, useBrackets, parameterAliases) + ")";
+                case ExpressionType.Not: return "NOT (" + ParseExpressionInternal(((UnaryExpression)expression).Operand, useBrackets, parameterAliases) + ")";
                 case ExpressionType.Call:
                     return useBrackets
                         ? HandleMethodCallWithBrackets((MethodCallExpression)expression, parameterAliases)
@@ -611,7 +608,7 @@ namespace EasyDapper
                         return alias;
                     return GetAliasForType(paramExpr.Type);
                 default:
-                    throw new NotSupportedException("Expression type '" + expression.NodeType + "' is not supported.");
+                    throw new NotSupportedException("Expression type '" + expression.NodeType + "' is not supported");
             }
         }
 
@@ -677,7 +674,7 @@ namespace EasyDapper
                 var memberExpr = m.Arguments[0];
                 var listObject = Evaluate(m.Object) as System.Collections.IEnumerable;
                 if (listObject == null)
-                    throw new NotSupportedException("Unsupported Contains signature or non-constant collection.");
+                    throw new NotSupportedException("Unsupported Contains signature or non-constant collection");
                 var memberSql = ParseMember(memberExpr, parameterAliases);
                 var items = new List<string>();
                 foreach (var item in listObject)
@@ -716,7 +713,7 @@ namespace EasyDapper
                 var memberExpr = m.Arguments[0];
                 var listObject = Evaluate(m.Object) as System.Collections.IEnumerable;
                 if (listObject == null)
-                    throw new NotSupportedException("Unsupported Contains signature or non-constant collection.");
+                    throw new NotSupportedException("Unsupported Contains signature or non-constant collection");
                 var memberSql = ParseMemberWithBrackets(memberExpr, parameterAliases);
                 var items = new List<string>();
                 foreach (var item in listObject)
@@ -739,13 +736,13 @@ namespace EasyDapper
                 var prop = ParseMemberWithBrackets(m.Arguments[0], parameterAliases);
                 return "(" + prop + " IS NULL OR " + prop + " = '')";
             }
-            throw new NotSupportedException("Method '" + m.Method.Name + "' is not supported.");
+            throw new NotSupportedException("Method '" + m.Method.Name + "' is not supported");
         }
 
         private string HandleLike(MethodCallExpression m, string format, Dictionary<ParameterExpression, string> parameterAliases = null)
         {
             if (m.Object == null)
-                throw new NotSupportedException("LIKE requires instance method call on string.");
+                throw new NotSupportedException("LIKE requires instance method call on string");
             var prop = ParseMember(m.Object, parameterAliases);
             var val = ParseValue(m.Arguments[0], format, parameterAliases);
             return prop + " LIKE " + val;
@@ -754,7 +751,7 @@ namespace EasyDapper
         private string HandleLikeWithBrackets(MethodCallExpression m, string format, Dictionary<ParameterExpression, string> parameterAliases = null)
         {
             if (m.Object == null)
-                throw new NotSupportedException("LIKE requires instance method call on string.");
+                throw new NotSupportedException("LIKE requires instance method call on string");
             var prop = ParseMemberWithBrackets(m.Object, parameterAliases);
             var val = ParseValue(m.Arguments[0], format, parameterAliases);
             return prop + " LIKE " + val;
@@ -1161,7 +1158,7 @@ namespace EasyDapper
         private string GetColumnName(PropertyInfo property)
         {
             if (property == null)
-                throw new ArgumentNullException(nameof(property), "PropertyInfo cannot be null.");
+                throw new ArgumentNullException(nameof(property), "PropertyInfo cannot be null");
 
             return ColumnNameCache.GetOrAdd(property, p =>
             {

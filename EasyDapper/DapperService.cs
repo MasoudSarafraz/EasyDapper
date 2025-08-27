@@ -24,7 +24,6 @@ namespace EasyDapper
         private readonly ThreadLocal<IDbTransaction> _threadLocalTransaction;
         private readonly ThreadLocal<int> _threadLocalTransactionCount;
         private readonly ThreadLocal<Stack<string>> _threadLocalSavePoints;
-
         // کش‌های استاتیک برای thread-safety
         private static readonly ConcurrentDictionary<Type, string> InsertQueryCache = new ConcurrentDictionary<Type, string>();
         private static readonly ConcurrentDictionary<Type, string> UpdateQueryCache = new ConcurrentDictionary<Type, string>();
@@ -34,9 +33,7 @@ namespace EasyDapper
         private static readonly ConcurrentDictionary<Type, PropertyInfo> IdentityPropertyCache = new ConcurrentDictionary<Type, PropertyInfo>();
         private static readonly ConcurrentDictionary<string, string> TableNameCache = new ConcurrentDictionary<string, string>();
         private static readonly ConcurrentDictionary<string, string> ColumnNameCache = new ConcurrentDictionary<string, string>();
-
         private readonly ConcurrentDictionary<object, object> _attachedEntities = new ConcurrentDictionary<object, object>();
-
         private const int DEFAULT_BATCH_SIZE = 100;
         private const int DEFAULT_TIMEOUT = 30;
         private const string DEFAULT_SCHEMA = "dbo";
@@ -115,10 +112,10 @@ namespace EasyDapper
         public void CommitTransaction()
         {
             if (_threadLocalTransaction.Value == null)
-                throw new InvalidOperationException("No transaction is in progress.");
+                throw new InvalidOperationException("No transaction is in progress");
 
             if (_threadLocalTransactionCount.Value <= 0)
-                throw new InvalidOperationException("No active transactions to commit.");
+                throw new InvalidOperationException("No active transactions to commit");
 
             _threadLocalTransactionCount.Value--;
 
@@ -142,7 +139,7 @@ namespace EasyDapper
         public void RollbackTransaction()
         {
             if (_threadLocalTransaction.Value == null)
-                throw new InvalidOperationException("No transaction is in progress.");
+                throw new InvalidOperationException("No transaction is in progress");
 
             try
             {
@@ -1017,7 +1014,7 @@ namespace EasyDapper
             catch (Exception ex)
             {
                 try { ExecuteRawCommand($"IF OBJECT_ID('tempdb..{tempTableName}') IS NOT NULL DROP TABLE {tempTableName}"); } catch { }
-                throw new InvalidOperationException("Bulk copy with identity retrieval failed.", ex);
+                throw new InvalidOperationException("Bulk copy with identity retrieval failed", ex);
             }
 
             identities.Sort();
@@ -1064,7 +1061,7 @@ namespace EasyDapper
             catch (Exception ex)
             {
                 try { await connection.ExecuteAsync(new CommandDefinition($"IF OBJECT_ID('tempdb..{tempTableName}') IS NOT NULL DROP TABLE {tempTableName}", transaction: _threadLocalTransaction.Value, cancellationToken: cancellationToken)); } catch { }
-                throw new InvalidOperationException("Bulk copy with identity retrieval failed.", ex);
+                throw new InvalidOperationException("Bulk copy with identity retrieval failed", ex);
             }
 
             identities.Sort();
@@ -1131,7 +1128,7 @@ namespace EasyDapper
                 }
                 catch
                 {
-                    // Ignore errors during rollback on dispose
+                    // Ignore 
                 }
             }
 
