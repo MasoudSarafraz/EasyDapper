@@ -13,6 +13,7 @@ using EasyDapper.Attributes;
 
 namespace EasyDapper
 {
+
     internal class ExpressionParser
     {
         private readonly AliasManager _aliasManager;
@@ -65,15 +66,37 @@ namespace EasyDapper
                     return "(" + ParseExpressionInternal(((BinaryExpression)expression).Left, useBrackets, parameterAliases) +
                            " OR " + ParseExpressionInternal(((BinaryExpression)expression).Right, useBrackets, parameterAliases) + ")";
                 case ExpressionType.Not:
-                    return "NOT (" + ParseExpressionInternal(((UnaryExpression)expression).Operand, useBrackets, parameterAliases) + ")";
+                    var operand = ((UnaryExpression)expression).Operand;
+                    // Handle NOT for boolean properties
+                    if (operand.NodeType == ExpressionType.MemberAccess)
+                    {
+                        var member = (MemberExpression)operand;
+                        if (member.Type == typeof(bool) || member.Type == typeof(bool?))
+                        {
+                            var column = ParseMemberWithBrackets(member, parameterAliases);
+                            return member.Type == typeof(bool?)
+                                ? $"(ISNULL({column}, 0) = 0 OR {column} IS NULL)"
+                                : $"{column} = 0";
+                        }
+                    }
+                    return "NOT (" + ParseExpressionInternal(operand, useBrackets, parameterAliases) + ")";
                 case ExpressionType.Call:
                     return useBrackets
                         ? HandleMethodCallWithBrackets((MethodCallExpression)expression, parameterAliases)
                         : HandleMethodCall((MethodCallExpression)expression, parameterAliases);
                 case ExpressionType.MemberAccess:
+                    var memberExpr = (MemberExpression)expression;
+                    // Handle boolean properties in condition contexts
+                    if (useBrackets && (memberExpr.Type == typeof(bool) || memberExpr.Type == typeof(bool?)))
+                    {
+                        var column = ParseMemberWithBrackets(memberExpr, parameterAliases);
+                        return memberExpr.Type == typeof(bool?)
+                            ? $"ISNULL({column}, 0) = 1"
+                            : $"{column} = 1";
+                    }
                     return useBrackets
-                        ? ParseMemberWithBrackets((MemberExpression)expression, parameterAliases)
-                        : ParseMember((MemberExpression)expression, parameterAliases);
+                        ? ParseMemberWithBrackets(memberExpr, parameterAliases)
+                        : ParseMember(memberExpr, parameterAliases);
                 case ExpressionType.Constant:
                     return HandleConstant((ConstantExpression)expression);
                 case ExpressionType.Convert:
@@ -99,6 +122,15 @@ namespace EasyDapper
             {
                 var tableAlias = GetTableAliasForMember(member);
                 var columnName = member.Member.Name;
+
+                // Handle nullable Value property
+                if (member.Member.Name == "Value" && member.Expression != null &&
+                    member.Expression.Type.IsGenericType &&
+                    member.Expression.Type.GetGenericTypeDefinition() == typeof(Nullable<>))
+                {
+                    return ParseSelectMember(member.Expression);
+                }
+
                 if (_aliasManager.IsSubqueryAlias(tableAlias))
                     return $"{tableAlias}.{columnName} AS {columnName}";
                 return $"{tableAlias}.[{GetColumnName(member.Member as PropertyInfo)}] AS {columnName}";
@@ -116,6 +148,16 @@ namespace EasyDapper
                     {
                         var tableAlias = GetTableAliasForMember(memberArg);
                         var columnName = memberArg.Member.Name;
+
+                        // Handle nullable Value property
+                        if (memberArg.Member.Name == "Value" && memberArg.Expression != null &&
+                            memberArg.Expression.Type.IsGenericType &&
+                            memberArg.Expression.Type.GetGenericTypeDefinition() == typeof(Nullable<>))
+                        {
+                            columns.Add(ParseSelectMember(memberArg.Expression));
+                            continue;
+                        }
+
                         if (_aliasManager.IsSubqueryAlias(tableAlias))
                             columns.Add($"{tableAlias}.{columnName} AS {newExpr.Members[i].Name}");
                         else
@@ -166,7 +208,6 @@ namespace EasyDapper
             return list;
         }
 
-        // Changed to public for access from QueryBuilderCore
         public string ParseMemberWithBrackets(Expression expression, Dictionary<ParameterExpression, string> parameterAliases = null)
         {
             var unary = expression as UnaryExpression;
@@ -178,6 +219,14 @@ namespace EasyDapper
             var member = expression as MemberExpression;
             if (member != null)
             {
+                // Handle nullable Value property
+                if (member.Member.Name == "Value" && member.Expression != null &&
+                    member.Expression.Type.IsGenericType &&
+                    member.Expression.Type.GetGenericTypeDefinition() == typeof(Nullable<>))
+                {
+                    return ParseMemberWithBrackets(member.Expression, parameterAliases);
+                }
+
                 if (member.Expression != null)
                 {
                     var tableAlias = GetTableAliasForMember(member, parameterAliases);
@@ -199,6 +248,15 @@ namespace EasyDapper
                     var memberArg = arg as MemberExpression;
                     if (memberArg != null)
                     {
+                        // Handle nullable Value property
+                        if (memberArg.Member.Name == "Value" && memberArg.Expression != null &&
+                            memberArg.Expression.Type.IsGenericType &&
+                            memberArg.Expression.Type.GetGenericTypeDefinition() == typeof(Nullable<>))
+                        {
+                            columns.Add(ParseMemberWithBrackets(memberArg.Expression, parameterAliases));
+                            continue;
+                        }
+
                         var tableAlias = GetTableAliasForMember(memberArg, parameterAliases);
                         var columnName = memberArg.Member.Name;
                         if (_aliasManager.IsSubqueryAlias(tableAlias))
@@ -229,29 +287,113 @@ namespace EasyDapper
 
         private string HandleEqual(BinaryExpression expression, Dictionary<ParameterExpression, string> parameterAliases = null)
         {
+            // Handle boolean comparisons
+            if (expression.Left.NodeType == ExpressionType.MemberAccess)
+            {
+                var leftMember = (MemberExpression)expression.Left;
+                if (leftMember.Type == typeof(bool) || leftMember.Type == typeof(bool?))
+                {
+                    var column = ParseMember(leftMember, parameterAliases);
+                    if (expression.Right.NodeType == ExpressionType.Constant)
+                    {
+                        var rightConst = (ConstantExpression)expression.Right;
+                        if (rightConst.Value is bool boolValue)
+                        {
+                            return leftMember.Type == typeof(bool?)
+                                ? $"ISNULL({column}, 0) = {(boolValue ? 1 : 0)}"
+                                : $"{column} = {(boolValue ? 1 : 0)}";
+                        }
+                    }
+                }
+            }
+
             if (IsNullConstant(expression.Right))
                 return ParseMember(expression.Left, parameterAliases) + " IS NULL";
+
             return HandleBinary(expression, "=", parameterAliases);
         }
 
         private string HandleEqualWithBrackets(BinaryExpression expression, Dictionary<ParameterExpression, string> parameterAliases = null)
         {
+            // Handle boolean comparisons
+            if (expression.Left.NodeType == ExpressionType.MemberAccess)
+            {
+                var leftMember = (MemberExpression)expression.Left;
+                if (leftMember.Type == typeof(bool) || leftMember.Type == typeof(bool?))
+                {
+                    var column = ParseMemberWithBrackets(leftMember, parameterAliases);
+                    if (expression.Right.NodeType == ExpressionType.Constant)
+                    {
+                        var rightConst = (ConstantExpression)expression.Right;
+                        if (rightConst.Value is bool boolValue)
+                        {
+                            return leftMember.Type == typeof(bool?)
+                                ? $"ISNULL({column}, 0) = {(boolValue ? 1 : 0)}"
+                                : $"{column} = {(boolValue ? 1 : 0)}";
+                        }
+                    }
+                }
+            }
+
             if (IsNullConstant(expression.Right))
                 return ParseMemberWithBrackets(expression.Left, parameterAliases) + " IS NULL";
+
             return HandleBinaryWithBrackets(expression, "=", parameterAliases);
         }
 
         private string HandleNotEqual(BinaryExpression expression, Dictionary<ParameterExpression, string> parameterAliases = null)
         {
+            // Handle boolean comparisons
+            if (expression.Left.NodeType == ExpressionType.MemberAccess)
+            {
+                var leftMember = (MemberExpression)expression.Left;
+                if (leftMember.Type == typeof(bool) || leftMember.Type == typeof(bool?))
+                {
+                    var column = ParseMember(leftMember, parameterAliases);
+                    if (expression.Right.NodeType == ExpressionType.Constant)
+                    {
+                        var rightConst = (ConstantExpression)expression.Right;
+                        if (rightConst.Value is bool boolValue)
+                        {
+                            return leftMember.Type == typeof(bool?)
+                                ? $"ISNULL({column}, 0) <> {(boolValue ? 1 : 0)}"
+                                : $"{column} <> {(boolValue ? 1 : 0)}";
+                        }
+                    }
+                }
+            }
+
             if (IsNullConstant(expression.Right))
                 return ParseMember(expression.Left, parameterAliases) + " IS NOT NULL";
+
             return HandleBinary(expression, "<>", parameterAliases);
         }
 
         private string HandleNotEqualWithBrackets(BinaryExpression expression, Dictionary<ParameterExpression, string> parameterAliases = null)
         {
+            // Handle boolean comparisons
+            if (expression.Left.NodeType == ExpressionType.MemberAccess)
+            {
+                var leftMember = (MemberExpression)expression.Left;
+                if (leftMember.Type == typeof(bool) || leftMember.Type == typeof(bool?))
+                {
+                    var column = ParseMemberWithBrackets(leftMember, parameterAliases);
+                    if (expression.Right.NodeType == ExpressionType.Constant)
+                    {
+                        var rightConst = (ConstantExpression)expression.Right;
+                        if (rightConst.Value is bool boolValue)
+                        {
+                            return leftMember.Type == typeof(bool?)
+                                ? $"ISNULL({column}, 0) <> {(boolValue ? 1 : 0)}"
+                                : $"{column} <> {(boolValue ? 1 : 0)}";
+                        }
+                    }
+                }
+            }
+
             if (IsNullConstant(expression.Right))
                 return ParseMemberWithBrackets(expression.Left, parameterAliases) + " IS NOT NULL";
+
             return HandleBinaryWithBrackets(expression, "<>", parameterAliases);
         }
 
@@ -278,6 +420,7 @@ namespace EasyDapper
 
         private string HandleMethodCall(MethodCallExpression m, Dictionary<ParameterExpression, string> parameterAliases = null)
         {
+            // Handle string methods
             if (m.Method.DeclaringType == typeof(string))
             {
                 if (m.Method.Name == "StartsWith") return HandleLike(m, "{0}%", parameterAliases);
@@ -285,6 +428,16 @@ namespace EasyDapper
                 if (m.Method.Name == "Contains") return HandleLike(m, "%{0}%", parameterAliases);
             }
 
+            // Handle nullable HasValue
+            if (m.Method.Name == "HasValue" && m.Object != null &&
+                m.Object.Type.IsGenericType &&
+                m.Object.Type.GetGenericTypeDefinition() == typeof(Nullable<>))
+            {
+                var column = ParseMember(m.Object, parameterAliases);
+                return $"{column} IS NOT NULL";
+            }
+
+            // Handle Contains on collections
             if (m.Method.Name == "Contains" && m.Arguments.Count == 1)
             {
                 var memberExpr = m.Arguments[0];
@@ -303,6 +456,7 @@ namespace EasyDapper
                 return memberSql + " IN (" + string.Join(",", items) + ")";
             }
 
+            // Handle Between method
             if (m.Method.Name == "Between" && m.Arguments.Count == 3)
             {
                 var property = ParseMember(m.Arguments[0], parameterAliases);
@@ -311,6 +465,7 @@ namespace EasyDapper
                 return property + " BETWEEN " + lower + " AND " + upper;
             }
 
+            // Handle string IsNullOrEmpty
             if (m.Method.Name == "IsNullOrEmpty" && m.Arguments.Count == 1 && m.Method.DeclaringType == typeof(string))
             {
                 var prop = ParseMember(m.Arguments[0], parameterAliases);
@@ -322,6 +477,7 @@ namespace EasyDapper
 
         private string HandleMethodCallWithBrackets(MethodCallExpression m, Dictionary<ParameterExpression, string> parameterAliases = null)
         {
+            // Handle string methods
             if (m.Method.DeclaringType == typeof(string))
             {
                 if (m.Method.Name == "StartsWith") return HandleLikeWithBrackets(m, "{0}%", parameterAliases);
@@ -329,6 +485,16 @@ namespace EasyDapper
                 if (m.Method.Name == "Contains") return HandleLikeWithBrackets(m, "%{0}%", parameterAliases);
             }
 
+            // Handle nullable HasValue
+            if (m.Method.Name == "HasValue" && m.Object != null &&
+                m.Object.Type.IsGenericType &&
+                m.Object.Type.GetGenericTypeDefinition() == typeof(Nullable<>))
+            {
+                var column = ParseMemberWithBrackets(m.Object, parameterAliases);
+                return $"{column} IS NOT NULL";
+            }
+
+            // Handle Contains on collections
             if (m.Method.Name == "Contains" && m.Arguments.Count == 1)
             {
                 var memberExpr = m.Arguments[0];
@@ -347,6 +513,7 @@ namespace EasyDapper
                 return memberSql + " IN (" + string.Join(",", items) + ")";
             }
 
+            // Handle Between method
             if (m.Method.Name == "Between" && m.Arguments.Count == 3)
             {
                 var property = ParseMemberWithBrackets(m.Arguments[0], parameterAliases);
@@ -355,6 +522,7 @@ namespace EasyDapper
                 return property + " BETWEEN " + lower + " AND " + upper;
             }
 
+            // Handle string IsNullOrEmpty
             if (m.Method.Name == "IsNullOrEmpty" && m.Arguments.Count == 1 && m.Method.DeclaringType == typeof(string))
             {
                 var prop = ParseMemberWithBrackets(m.Arguments[0], parameterAliases);
@@ -395,6 +563,14 @@ namespace EasyDapper
             var member = expression as MemberExpression;
             if (member != null)
             {
+                // Handle nullable Value property
+                if (member.Member.Name == "Value" && member.Expression != null &&
+                    member.Expression.Type.IsGenericType &&
+                    member.Expression.Type.GetGenericTypeDefinition() == typeof(Nullable<>))
+                {
+                    return ParseMember(member.Expression, parameterAliases);
+                }
+
                 if (member.Expression != null)
                 {
                     var tableAlias = GetTableAliasForMember(member, parameterAliases);
@@ -423,21 +599,17 @@ namespace EasyDapper
             {
                 if (parameterAliases != null && parameterAliases.TryGetValue(paramExpr, out var alias))
                     return alias;
-
                 if (_aliasManager.TryGetSubQueryAlias(paramExpr.Type, out var subQueryAlias))
                     return subQueryAlias;
-
                 var memberType = member.Member.DeclaringType;
                 if (_aliasManager.TryGetTypeAlias(memberType, out var mainAlias))
                     return mainAlias;
-
                 var tableName = GetTableName(memberType);
                 foreach (var mapping in _aliasManager.GetAllTableAliases())
                 {
                     if (mapping.Key.StartsWith(tableName + "_"))
                         return mapping.Value;
                 }
-
                 return _aliasManager.GetAliasForType(memberType);
             }
 
@@ -568,6 +740,7 @@ namespace EasyDapper
             });
         }
     }
+
     internal class AliasManager
     {
         private readonly ConcurrentDictionary<string, string> _tableAliasMappings = new ConcurrentDictionary<string, string>();
