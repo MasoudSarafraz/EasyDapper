@@ -13,12 +13,12 @@ using EasyDapper.Attributes;
 
 namespace EasyDapper
 {
-    internal class LruCache<TKey, TValue>
+    internal class QueryBuilderLruCache<TKey, TValue>
     {
         private readonly int _capacity;
         private readonly ConcurrentDictionary<TKey, LinkedListNode<LruCacheItem>> _cacheMap;
         private readonly LinkedList<LruCacheItem> _lruList;
-        public LruCache(int capacity)
+        public QueryBuilderLruCache(int capacity)
         {
             if (capacity <= 0) throw new ArgumentOutOfRangeException("capacity");
             _capacity = capacity;
@@ -86,8 +86,8 @@ namespace EasyDapper
     }
     internal class ExpressionParser
     {
-        private static readonly LruCache<Type, string> TableNameCache = new LruCache<Type, string>(500);
-        private static readonly LruCache<MemberInfo, string> ColumnNameCache = new LruCache<MemberInfo, string>(3000);
+        private static readonly QueryBuilderLruCache<Type, string> TableNameCache = new QueryBuilderLruCache<Type, string>(500);
+        private static readonly QueryBuilderLruCache<MemberInfo, string> ColumnNameCache = new QueryBuilderLruCache<MemberInfo, string>(3000);
         private readonly AliasManager _aliasManager;
         private readonly ParameterBuilder _parameterBuilder;
         private static readonly char[] InvalidIdentifierChars = new[] { ';', '-', '-', '/', '*', '\'', '"', '[', ']' };
