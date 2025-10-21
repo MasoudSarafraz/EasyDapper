@@ -10,87 +10,111 @@ using System.Threading;
 using System.Threading.Tasks;
 using Dapper;
 using EasyDapper.Attributes;
+using System.Runtime.CompilerServices;
 
 namespace EasyDapper
 {
-    internal class QueryBuilderLruCache<TKey, TValue>
+    internal sealed class LockFreeLruCache<TKey, TValue>
     {
+        private sealed class LruNode
+        {
+            public readonly TKey Key;
+            public readonly TValue Value;
+            public long Timestamp;
+            public LruNode(TKey key, TValue value)
+            {
+                Key = key;
+                Value = value;
+                Timestamp = DateTime.UtcNow.Ticks;
+            }
+        }
+
         private readonly int _capacity;
-        private readonly ConcurrentDictionary<TKey, LinkedListNode<LruCacheItem>> _cacheMap;
-        private readonly LinkedList<LruCacheItem> _lruList;
-        public QueryBuilderLruCache(int capacity)
+        private readonly ConcurrentDictionary<TKey, LruNode> _cache;
+        private long _lastEvictionTicks;
+
+        public LockFreeLruCache(int capacity)
         {
             if (capacity <= 0) throw new ArgumentOutOfRangeException("capacity");
             _capacity = capacity;
-            _cacheMap = new ConcurrentDictionary<TKey, LinkedListNode<LruCacheItem>>();
-            _lruList = new LinkedList<LruCacheItem>();
+            _cache = new ConcurrentDictionary<TKey, LruNode>();
+            _lastEvictionTicks = DateTime.UtcNow.Ticks;
         }
+
         public TValue GetOrAdd(TKey key, Func<TKey, TValue> valueFactory)
         {
             if (key == null) throw new ArgumentNullException("key");
             if (valueFactory == null) throw new ArgumentNullException("valueFactory");
-            while (true)
+
+            LruNode node;
+            if (_cache.TryGetValue(key, out node))
             {
-                LinkedListNode<LruCacheItem> node;
-                if (_cacheMap.TryGetValue(key, out node))
-                {
-                    lock (_lruList)
-                    {
-                        if (node.List == _lruList)
-                        {
-                            _lruList.Remove(node);
-                            _lruList.AddFirst(node);
-                            return node.Value.Value;
-                        }
-                    }
-                }
-                var value = valueFactory(key);
-                var item = new LruCacheItem(key, value);
-                var newNode = new LinkedListNode<LruCacheItem>(item);
-                lock (_lruList)
-                {
-                    if (_cacheMap.TryAdd(key, newNode))
-                    {
-                        _lruList.AddFirst(newNode);
-                        if (_lruList.Count > _capacity)
-                        {
-                            var last = _lruList.Last;
-                            _lruList.RemoveLast();
-                            LinkedListNode<LruCacheItem> removedNode;
-                            _cacheMap.TryRemove(last.Value.Key, out removedNode);
-                        }
-                        return value;
-                    }
-                    else
-                    {
-                        if (_cacheMap.TryGetValue(key, out node))
-                        {
-                            _lruList.Remove(node);
-                            _lruList.AddFirst(node);
-                            return node.Value.Value;
-                        }
-                    }
-                }
+                Interlocked.Exchange(ref node.Timestamp, DateTime.UtcNow.Ticks);
+                return node.Value;
+            }
+
+            var newValue = valueFactory(key);
+            var newNode = new LruNode(key, newValue);
+
+            node = _cache.GetOrAdd(key, newNode);
+
+            if (node == newNode)
+            {
+                TryEvict();
+                return newValue;
+            }
+
+            Interlocked.Exchange(ref node.Timestamp, DateTime.UtcNow.Ticks);
+            return node.Value;
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private void TryEvict()
+        {
+            var currentCount = _cache.Count;
+            if (currentCount <= _capacity * 1.2) return;
+
+            var nowTicks = DateTime.UtcNow.Ticks;
+            var lastEviction = Interlocked.Read(ref _lastEvictionTicks);
+
+            if (nowTicks - lastEviction < TimeSpan.TicksPerSecond) return;
+
+            if (Interlocked.CompareExchange(ref _lastEvictionTicks, nowTicks, lastEviction) == lastEviction)
+            {
+                Task.Run(() => EvictOldEntries());
             }
         }
-        private class LruCacheItem
+
+        private void EvictOldEntries()
         {
-            public TKey Key;
-            public TValue Value;
-            public LruCacheItem(TKey k, TValue v)
+            try
             {
-                Key = k;
-                Value = v;
+                var currentCount = _cache.Count;
+                if (currentCount <= _capacity) return;
+
+                var toRemove = _cache.OrderBy(x => x.Value.Timestamp)
+                                   .Take(currentCount - _capacity)
+                                   .Select(x => x.Key)
+                                   .ToList();
+
+                foreach (var key in toRemove)
+                {
+                    LruNode removed;
+                    _cache.TryRemove(key, out removed);
+                }
             }
+            catch { }
         }
     }
-    internal class ExpressionParser
+
+    internal sealed class ExpressionParser
     {
-        private static readonly QueryBuilderLruCache<Type, string> TableNameCache = new QueryBuilderLruCache<Type, string>(500);
-        private static readonly QueryBuilderLruCache<MemberInfo, string> ColumnNameCache = new QueryBuilderLruCache<MemberInfo, string>(3000);
+        private static readonly LockFreeLruCache<Type, string> TableNameCache = new LockFreeLruCache<Type, string>(500);
+        private static readonly LockFreeLruCache<MemberInfo, string> ColumnNameCache = new LockFreeLruCache<MemberInfo, string>(3000);
+        private static readonly LockFreeLruCache<int, string> ExpressionCache = new LockFreeLruCache<int, string>(10000);
         private readonly AliasManager _aliasManager;
         private readonly ParameterBuilder _parameterBuilder;
-        private static readonly char[] InvalidIdentifierChars = new[] { ';', '-', '-', '/', '*', '\'', '"', '[', ']' };
+        private static readonly char[] InvalidIdentifierChars = new[] { ';', '-', '-', '/', '*', '\'', '"', '[', ']', '(', ')', '&', '|', '^', '%', '~', '`', '$', '{', '}', '<', '>', '?', '!', '=', '+', ',', ':', '\\', ' ', '\t', '\n', '\r' };
         public ExpressionParser(AliasManager aliasManager, ParameterBuilder parameterBuilder)
         {
             if (aliasManager == null) throw new ArgumentNullException("aliasManager");
@@ -105,61 +129,82 @@ namespace EasyDapper
         private string ParseExpressionInternal(Expression expression, bool useBrackets, Dictionary<ParameterExpression, string> parameterAliases = null)
         {
             if (expression == null) throw new ArgumentNullException("expression");
+            var cacheKey = CalculateExpressionHash(expression, useBrackets, parameterAliases);
+            if (cacheKey != 0)
+            {
+                var cached = ExpressionCache.GetOrAdd(cacheKey, _ => null);
+                if (cached != null) return cached;
+            }
+            string result;
             switch (expression.NodeType)
             {
-                case ExpressionType.Equal: return useBrackets ? HandleEqualWithBrackets((BinaryExpression)expression, parameterAliases) : HandleEqual((BinaryExpression)expression, parameterAliases);
-                case ExpressionType.NotEqual: return useBrackets ? HandleNotEqualWithBrackets((BinaryExpression)expression, parameterAliases) : HandleNotEqual((BinaryExpression)expression, parameterAliases);
+                case ExpressionType.Equal: result = useBrackets ? HandleEqualWithBrackets((BinaryExpression)expression, parameterAliases) : HandleEqual((BinaryExpression)expression, parameterAliases); break;
+                case ExpressionType.NotEqual: result = useBrackets ? HandleNotEqualWithBrackets((BinaryExpression)expression, parameterAliases) : HandleNotEqual((BinaryExpression)expression, parameterAliases); break;
                 case ExpressionType.GreaterThan:
                 case ExpressionType.LessThan:
                 case ExpressionType.GreaterThanOrEqual:
                 case ExpressionType.LessThanOrEqual:
                     var op = GetOperator(expression.NodeType);
-                    return useBrackets ? HandleBinaryWithBrackets((BinaryExpression)expression, op, parameterAliases) : HandleBinary((BinaryExpression)expression, op, parameterAliases);
-                case ExpressionType.AndAlso: return "(" + ParseExpressionInternal(((BinaryExpression)expression).Left, useBrackets, parameterAliases) + " AND " + ParseExpressionInternal(((BinaryExpression)expression).Right, useBrackets, parameterAliases) + ")";
-                case ExpressionType.OrElse: return "(" + ParseExpressionInternal(((BinaryExpression)expression).Left, useBrackets, parameterAliases) + " OR " + ParseExpressionInternal(((BinaryExpression)expression).Right, useBrackets, parameterAliases) + ")";
-                case ExpressionType.Not:
-                    var operand = ((UnaryExpression)expression).Operand;
-                    if (operand.NodeType == ExpressionType.Call)
-                    {
-                        var methodCall = (MethodCallExpression)operand;
-                        if (methodCall.Method.Name == "IsNullOrEmpty" && methodCall.Method.DeclaringType == typeof(string))
-                        {
-                            var prop = useBrackets ? ParseMemberWithBrackets(methodCall.Arguments[0], parameterAliases) : ParseMember(methodCall.Arguments[0], parameterAliases);
-                            return "(" + prop + " IS NOT NULL AND " + prop + " <> '')";
-                        }
-                    }
-                    if (operand.NodeType == ExpressionType.MemberAccess)
-                    {
-                        var member = (MemberExpression)operand;
-                        if (member.Type == typeof(bool) || member.Type == typeof(bool?))
-                        {
-                            var column = useBrackets ? ParseMemberWithBrackets(member, parameterAliases) : ParseMember(member, parameterAliases);
-                            return member.Type == typeof(bool?) ? "(ISNULL(" + column + ", 0) = 0 OR " + column + " IS NULL)" : column + " = 0";
-                        }
-                    }
-                    return "NOT (" + ParseExpressionInternal(operand, useBrackets, parameterAliases) + ")";
-                case ExpressionType.Call: return useBrackets ? HandleMethodCallWithBrackets((MethodCallExpression)expression, parameterAliases) : HandleMethodCall((MethodCallExpression)expression, parameterAliases);
-                case ExpressionType.MemberAccess:
-                    var memberExpr = (MemberExpression)expression;
-                    if (memberExpr.Member.Name == "HasValue" && memberExpr.Expression != null && memberExpr.Expression.Type.IsGenericType && memberExpr.Expression.Type.GetGenericTypeDefinition() == typeof(Nullable<>))
-                    {
-                        var column = useBrackets ? ParseMemberWithBrackets(memberExpr.Expression, parameterAliases) : ParseMember(memberExpr.Expression, parameterAliases);
-                        return column + " IS NOT NULL";
-                    }
-                    if (useBrackets && (memberExpr.Type == typeof(bool) || memberExpr.Type == typeof(bool?)))
-                    {
-                        var column = useBrackets ? ParseMemberWithBrackets(memberExpr, parameterAliases) : ParseMember(memberExpr, parameterAliases);
-                        return memberExpr.Type == typeof(bool?) ? "ISNULL(" + column + ", 0) = 1" : column + " = 1";
-                    }
-                    return useBrackets ? ParseMemberWithBrackets(memberExpr, parameterAliases) : ParseMember(memberExpr, parameterAliases);
-                case ExpressionType.Constant: return HandleConstant((ConstantExpression)expression);
-                case ExpressionType.Convert: return ParseExpressionInternal(((UnaryExpression)expression).Operand, useBrackets, parameterAliases);
-                case ExpressionType.Parameter:
-                    var paramExpr = (ParameterExpression)expression;
-                    if (parameterAliases != null && parameterAliases.TryGetValue(paramExpr, out var alias)) return alias;
-                    return _aliasManager.GetAliasForType(paramExpr.Type);
+                    result = useBrackets ? HandleBinaryWithBrackets((BinaryExpression)expression, op, parameterAliases) : HandleBinary((BinaryExpression)expression, op, parameterAliases); break;
+                case ExpressionType.AndAlso: result = "(" + ParseExpressionInternal(((BinaryExpression)expression).Left, useBrackets, parameterAliases) + " AND " + ParseExpressionInternal(((BinaryExpression)expression).Right, useBrackets, parameterAliases) + ")"; break;
+                case ExpressionType.OrElse: result = "(" + ParseExpressionInternal(((BinaryExpression)expression).Left, useBrackets, parameterAliases) + " OR " + ParseExpressionInternal(((BinaryExpression)expression).Right, useBrackets, parameterAliases) + ")"; break;
+                case ExpressionType.Not: result = HandleNotExpression((UnaryExpression)expression, useBrackets, parameterAliases); break;
+                case ExpressionType.Call: result = useBrackets ? HandleMethodCallWithBrackets((MethodCallExpression)expression, parameterAliases) : HandleMethodCall((MethodCallExpression)expression, parameterAliases); break;
+                case ExpressionType.MemberAccess: result = HandleMemberAccess((MemberExpression)expression, useBrackets, parameterAliases); break;
+                case ExpressionType.Constant: result = HandleConstant((ConstantExpression)expression); break;
+                case ExpressionType.Convert: result = ParseExpressionInternal(((UnaryExpression)expression).Operand, useBrackets, parameterAliases); break;
+                case ExpressionType.Parameter: result = HandleParameter((ParameterExpression)expression, parameterAliases); break;
                 default: throw new NotSupportedException("Expression type '" + expression.NodeType + "' is not supported");
             }
+            if (cacheKey != 0 && result != null)
+            {
+                ExpressionCache.GetOrAdd(cacheKey, _ => result);
+            }
+            return result;
+        }
+        private string HandleNotExpression(UnaryExpression expression, bool useBrackets, Dictionary<ParameterExpression, string> parameterAliases)
+        {
+            var operand = expression.Operand;
+            if (operand.NodeType == ExpressionType.Call)
+            {
+                var methodCall = (MethodCallExpression)operand;
+                if (methodCall.Method.Name == "IsNullOrEmpty" && methodCall.Method.DeclaringType == typeof(string))
+                {
+                    var prop = useBrackets ? ParseMemberWithBrackets(methodCall.Arguments[0], parameterAliases) : ParseMember(methodCall.Arguments[0], parameterAliases);
+                    return "(" + prop + " IS NOT NULL AND " + prop + " <> '')";
+                }
+            }
+            if (operand.NodeType == ExpressionType.MemberAccess)
+            {
+                var member = (MemberExpression)operand;
+                if (member.Type == typeof(bool) || member.Type == typeof(bool?))
+                {
+                    var column = useBrackets ? ParseMemberWithBrackets(member, parameterAliases) : ParseMember(member, parameterAliases);
+                    return member.Type == typeof(bool?) ? "(ISNULL(" + column + ", 0) = 0 OR " + column + " IS NULL)" : column + " = 0";
+                }
+            }
+            return "NOT (" + ParseExpressionInternal(operand, useBrackets, parameterAliases) + ")";
+        }
+        private string HandleMemberAccess(MemberExpression expression, bool useBrackets, Dictionary<ParameterExpression, string> parameterAliases)
+        {
+            var memberExpr = expression;
+            if (memberExpr.Member.Name == "HasValue" && memberExpr.Expression != null && memberExpr.Expression.Type.IsGenericType && memberExpr.Expression.Type.GetGenericTypeDefinition() == typeof(Nullable<>))
+            {
+                var column = useBrackets ? ParseMemberWithBrackets(memberExpr.Expression, parameterAliases) : ParseMember(memberExpr.Expression, parameterAliases);
+                return column + " IS NOT NULL";
+            }
+            if (useBrackets && (memberExpr.Type == typeof(bool) || memberExpr.Type == typeof(bool?)))
+            {
+                var column = useBrackets ? ParseMemberWithBrackets(memberExpr, parameterAliases) : ParseMember(memberExpr, parameterAliases);
+                return memberExpr.Type == typeof(bool?) ? "ISNULL(" + column + ", 0) = 1" : column + " = 1";
+            }
+            return useBrackets ? ParseMemberWithBrackets(memberExpr, parameterAliases) : ParseMember(memberExpr, parameterAliases);
+        }
+        private string HandleParameter(ParameterExpression expression, Dictionary<ParameterExpression, string> parameterAliases)
+        {
+            var paramExpr = expression;
+            if (parameterAliases != null && parameterAliases.TryGetValue(paramExpr, out var alias)) return alias;
+            return _aliasManager.GetAliasForType(paramExpr.Type);
         }
         public string ParseSelectMember(Expression expression)
         {
@@ -176,7 +221,7 @@ namespace EasyDapper
                     return ParseSelectMember(member.Expression);
                 }
                 if (_aliasManager.IsSubqueryAlias(tableAlias)) return tableAlias + "." + columnName + " AS " + columnName;
-                return tableAlias + ".[" + GetColumnName(member.Member as PropertyInfo) + "] AS " + columnName;
+                return tableAlias + ".[" + GetColumnName(member.Member) + "] AS " + columnName;
             }
             var newExpr = expression as NewExpression;
             if (newExpr != null)
@@ -196,7 +241,7 @@ namespace EasyDapper
                             continue;
                         }
                         if (_aliasManager.IsSubqueryAlias(tableAlias)) columns.Add(tableAlias + "." + columnName + " AS " + newExpr.Members[i].Name);
-                        else columns.Add(tableAlias + ".[" + GetColumnName(memberArg.Member as PropertyInfo) + "] AS " + newExpr.Members[i].Name);
+                        else columns.Add(tableAlias + ".[" + GetColumnName(memberArg.Member) + "] AS " + newExpr.Members[i].Name);
                     }
                     else
                     {
@@ -246,9 +291,9 @@ namespace EasyDapper
                     var tableAlias = GetTableAliasForMember(member, parameterAliases);
                     var columnName = member.Member.Name;
                     if (_aliasManager.IsSubqueryAlias(tableAlias)) return tableAlias + "." + columnName;
-                    return tableAlias + ".[" + GetColumnName(member.Member as PropertyInfo) + "]";
+                    return tableAlias + ".[" + GetColumnName(member.Member) + "]";
                 }
-                return "[" + GetColumnName(member.Member as PropertyInfo) + "]";
+                return "[" + GetColumnName(member.Member) + "]";
             }
             var parameter = expression as ParameterExpression;
             if (parameter != null)
@@ -477,9 +522,9 @@ namespace EasyDapper
                     var tableAlias = GetTableAliasForMember(member, parameterAliases);
                     var columnName = member.Member.Name;
                     if (_aliasManager.IsSubqueryAlias(tableAlias)) return tableAlias + "." + columnName;
-                    return tableAlias + ".[" + GetColumnName(member.Member as PropertyInfo) + "]";
+                    return tableAlias + ".[" + GetColumnName(member.Member) + "]";
                 }
-                return "[" + GetColumnName(member.Member as PropertyInfo) + "]";
+                return "[" + GetColumnName(member.Member) + "]";
             }
             var parameter = expression as ParameterExpression;
             if (parameter != null)
@@ -604,25 +649,45 @@ namespace EasyDapper
                 return "[" + schema + "].[" + name + "]";
             });
         }
-        private string GetColumnName(PropertyInfo property)
+        private string GetColumnName(MemberInfo member)
         {
-            if (property == null) throw new ArgumentNullException("property", "PropertyInfo cannot be null");
-            return ColumnNameCache.GetOrAdd(property, p =>
+            if (member == null) throw new ArgumentNullException("member", "MemberInfo cannot be null");
+            return ColumnNameCache.GetOrAdd(member, m =>
             {
-                var column = p.GetCustomAttribute<ColumnAttribute>();
-                return column != null && !string.IsNullOrWhiteSpace(column.ColumnName) ? SanitizeIdentifier(column.ColumnName) : SanitizeIdentifier(p.Name);
+                var column = m.GetCustomAttribute<ColumnAttribute>();
+                return column != null && !string.IsNullOrWhiteSpace(column.ColumnName) ? SanitizeIdentifier(column.ColumnName) : SanitizeIdentifier(m.Name);
             });
         }
         private string SanitizeIdentifier(string identifier)
         {
             if (string.IsNullOrWhiteSpace(identifier)) throw new ArgumentException("Identifier cannot be null or empty.", "identifier");
-            if (identifier.IndexOfAny(InvalidIdentifierChars) >= 0) throw new ArgumentException("Identifier contains invalid characters.", "identifier");
+            if (identifier.IndexOfAny(InvalidIdentifierChars) >= 0) throw new ArgumentException("Identifier contains invalid characters: " + identifier, "identifier");
             return identifier;
         }
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private int CalculateExpressionHash(Expression expression, bool useBrackets, Dictionary<ParameterExpression, string> parameterAliases)
+        {
+            if (expression == null) return 0;
+            unchecked
+            {
+                int hash = expression.NodeType.GetHashCode();
+                hash = (hash * 397) ^ useBrackets.GetHashCode();
+                hash = (hash * 397) ^ expression.Type.GetHashCode();
+                if (parameterAliases != null)
+                {
+                    foreach (var kvp in parameterAliases)
+                    {
+                        hash = (hash * 397) ^ kvp.Key.GetHashCode();
+                        hash = (hash * 397) ^ (kvp.Value?.GetHashCode() ?? 0);
+                    }
+                }
+                return hash;
+            }
+        }
     }
-    internal class AliasManager
+    internal sealed class AliasManager
     {
-        private class AliasInfo
+        private sealed class AliasInfo
         {
             public AliasType Type { get; set; }
             public object Key { get; set; }
@@ -778,7 +843,7 @@ namespace EasyDapper
             return schema + "." + name;
         }
     }
-    internal class ParameterBuilder
+    internal sealed class ParameterBuilder
     {
         private readonly ConcurrentDictionary<string, object> _parameters = new ConcurrentDictionary<string, object>();
         private int _paramCounter = 0;
@@ -813,7 +878,7 @@ namespace EasyDapper
             return _parameters;
         }
     }
-    internal class QueryBuilderCore<T> : IDisposable
+    internal sealed class QueryBuilderCore<T> : IDisposable
     {
         private readonly Lazy<IDbConnection> _lazyConnection;
         private readonly AliasManager _aliasManager;
@@ -1197,7 +1262,7 @@ namespace EasyDapper
             Dispose(true);
             GC.SuppressFinalize(this);
         }
-        protected virtual void Dispose(bool disposing)
+        private void Dispose(bool disposing)
         {
             if (_disposed) return;
             if (disposing)
@@ -1207,8 +1272,8 @@ namespace EasyDapper
             _disposed = true;
         }
         ~QueryBuilderCore() { Dispose(false); }
-        private class JoinInfo { public string JoinType { get; set; } public string TableName { get; set; } public string Alias { get; set; } public string OnCondition { get; set; } }
-        private class ApplyInfo { public string ApplyType { get; set; } public string SubQuery { get; set; } public string SubQueryAlias { get; set; } }
+        private sealed class JoinInfo { public string JoinType { get; set; } public string TableName { get; set; } public string Alias { get; set; } public string OnCondition { get; set; } }
+        private sealed class ApplyInfo { public string ApplyType { get; set; } public string SubQuery { get; set; } public string SubQueryAlias { get; set; } }
         internal AliasManager GetAliasManager() => _aliasManager;
         internal ParameterBuilder GetParameterBuilder() => _parameterBuilder;
     }

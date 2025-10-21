@@ -16,77 +16,111 @@ using EasyDapper.Attributes;
 
 namespace EasyDapper
 {
-    internal class DapperServiceLruCache<TKey, TValue>
+    internal class LockFreeLruCacheDapperService<TKey, TValue>
     {
         private readonly int _capacity;
-        private readonly ConcurrentDictionary<TKey, LinkedListNode<LruCacheItem>> _cacheMap;
-        private readonly LinkedList<LruCacheItem> _lruList;
-        public DapperServiceLruCache(int capacity)
+        private readonly ConcurrentDictionary<TKey, LruNode> _nodes;
+        private readonly ConcurrentStack<TKey> _recentKeys;
+        private readonly Timer _cleanupTimer;
+        private long _totalAccesses;
+        private const int CLEANUP_INTERVAL_MS = 30000;
+
+        public LockFreeLruCacheDapperService(int capacity)
         {
             if (capacity <= 0) throw new ArgumentOutOfRangeException("capacity");
             _capacity = capacity;
-            _cacheMap = new ConcurrentDictionary<TKey, LinkedListNode<LruCacheItem>>();
-            _lruList = new LinkedList<LruCacheItem>();
+            _nodes = new ConcurrentDictionary<TKey, LruNode>();
+            _recentKeys = new ConcurrentStack<TKey>();
+            _totalAccesses = 0;
+            _cleanupTimer = new Timer(Cleanup, null, CLEANUP_INTERVAL_MS, CLEANUP_INTERVAL_MS);
         }
+
         public TValue GetOrAdd(TKey key, Func<TKey, TValue> valueFactory)
         {
             if (key == null) throw new ArgumentNullException("key");
             if (valueFactory == null) throw new ArgumentNullException("valueFactory");
+
+            var spinWait = new SpinWait();
             while (true)
             {
-                LinkedListNode<LruCacheItem> node;
-                if (_cacheMap.TryGetValue(key, out node))
+                LruNode node;
+                if (_nodes.TryGetValue(key, out node))
                 {
-                    lock (_lruList)
-                    {
-                        if (node.List == _lruList)
-                        {
-                            _lruList.Remove(node);
-                            _lruList.AddFirst(node);
-                            return node.Value.Value;
-                        }
-                    }
+                    Interlocked.Increment(ref node.AccessCount);
+                    Interlocked.Increment(ref _totalAccesses);
+                    _recentKeys.Push(key);
+                    return node.Value;
                 }
+
                 var value = valueFactory(key);
-                var item = new LruCacheItem(key, value);
-                var newNode = new LinkedListNode<LruCacheItem>(item);
-                lock (_lruList)
+                node = new LruNode { Value = value, AccessCount = 1 };
+
+                if (_nodes.TryAdd(key, node))
                 {
-                    if (_cacheMap.TryAdd(key, newNode))
+                    Interlocked.Increment(ref _totalAccesses);
+                    _recentKeys.Push(key);
+
+                    if (_nodes.Count > _capacity)
                     {
-                        _lruList.AddFirst(newNode);
-                        if (_lruList.Count > _capacity)
-                        {
-                            var last = _lruList.Last;
-                            _lruList.RemoveLast();
-                            LinkedListNode<LruCacheItem> removedNode;
-                            _cacheMap.TryRemove(last.Value.Key, out removedNode);
-                        }
-                        return value;
+                        Task.Run(() => EvictExcessItems());
                     }
-                    else
-                    {
-                        if (_cacheMap.TryGetValue(key, out node))
-                        {
-                            _lruList.Remove(node);
-                            _lruList.AddFirst(node);
-                            return node.Value.Value;
-                        }
-                    }
+                    return value;
                 }
+                spinWait.SpinOnce();
             }
         }
-        private class LruCacheItem
+
+        private void EvictExcessItems()
         {
-            public TKey Key;
-            public TValue Value;
-            public LruCacheItem(TKey k, TValue v)
+            try
             {
-                Key = k;
-                Value = v;
+                var excess = _nodes.Count - _capacity;
+                if (excess <= 0) return;
+
+                var candidates = new List<KeyValuePair<TKey, long>>();
+                foreach (var pair in _nodes)
+                {
+                    var accessCount = Interlocked.Read(ref pair.Value.AccessCount);
+                    candidates.Add(new KeyValuePair<TKey, long>(pair.Key, accessCount));
+                }
+
+                var toRemove = candidates.OrderBy(x => x.Value)
+                                       .Take(excess)
+                                       .Select(x => x.Key)
+                                       .ToList();
+
+                foreach (var key in toRemove)
+                {
+                    LruNode removed;
+                    _nodes.TryRemove(key, out removed);
+                }
             }
+            catch { }
+        }
+
+        private void Cleanup(object state)
+        {
+            try
+            {
+                if (_nodes.Count <= _capacity * 0.8) return;
+                EvictExcessItems();
+            }
+            catch { }
+        }
+
+        private class LruNode
+        {
+            public TValue Value;
+            public long AccessCount;
+        }
+
+        public void Dispose()
+        {
+            _cleanupTimer?.Dispose();
+            _nodes.Clear();
         }
     }
+
     internal sealed class DapperService : IDapperService, IDisposable
     {
         private readonly ConnectionManager _connectionManager;
@@ -160,8 +194,9 @@ namespace EasyDapper
             if (_disposed) return;
             if (disposing)
             {
-                if (_connectionManager != null) _connectionManager.Dispose();
-                if (_entityTracker != null) _entityTracker.Dispose();
+                _connectionManager?.Dispose();
+                _entityTracker?.Dispose();
+                _queryCache?.Dispose();
             }
             _disposed = true;
         }
@@ -173,7 +208,7 @@ namespace EasyDapper
         private readonly ThreadLocal<IDbConnection> _threadLocalConnection;
         private readonly ThreadLocal<IDbTransaction> _threadLocalTransaction;
         private readonly ThreadLocal<int> _threadLocalTransactionCount;
-        private readonly ThreadLocal<Stack<string>> _threadLocalSavePoints;
+        private readonly ThreadLocal<ConcurrentStack<string>> _threadLocalSavePoints;
         private readonly int _timeOut;
         private const int DEFAULT_TIMEOUT = 30;
         private bool _disposed = false;
@@ -192,26 +227,34 @@ namespace EasyDapper
             }, false);
             _threadLocalTransaction = new ThreadLocal<IDbTransaction>();
             _threadLocalTransactionCount = new ThreadLocal<int>(() => 0);
-            _threadLocalSavePoints = new ThreadLocal<Stack<string>>(() => new Stack<string>());
-            try
-            {
-                using (var tempConnection = new SqlConnection(_connectionString))
-                {
-                    tempConnection.Open();
-                    _timeOut = tempConnection.ConnectionTimeout;
-                }
-            }
-            catch { _timeOut = DEFAULT_TIMEOUT; }
+            _threadLocalSavePoints = new ThreadLocal<ConcurrentStack<string>>(() => new ConcurrentStack<string>());
+            _timeOut = GetConnectionTimeout();
         }
         public ConnectionManager(IDbConnection externalConnection)
         {
             if (externalConnection == null) throw new ArgumentNullException("externalConnection");
             _externalConnection = externalConnection;
-            try { _timeOut = _externalConnection.ConnectionTimeout; }
-            catch { _timeOut = DEFAULT_TIMEOUT; }
+            _timeOut = GetExternalConnectionTimeout();
             _threadLocalTransaction = new ThreadLocal<IDbTransaction>();
             _threadLocalTransactionCount = new ThreadLocal<int>(() => 0);
-            _threadLocalSavePoints = new ThreadLocal<Stack<string>>(() => new Stack<string>());
+            _threadLocalSavePoints = new ThreadLocal<ConcurrentStack<string>>(() => new ConcurrentStack<string>());
+        }
+        private int GetConnectionTimeout()
+        {
+            try
+            {
+                using (var tempConnection = new SqlConnection(_connectionString))
+                {
+                    tempConnection.Open();
+                    return tempConnection.ConnectionTimeout;
+                }
+            }
+            catch { return DEFAULT_TIMEOUT; }
+        }
+        private int GetExternalConnectionTimeout()
+        {
+            try { return _externalConnection.ConnectionTimeout; }
+            catch { return DEFAULT_TIMEOUT; }
         }
         public IDbConnection GetOpenConnection()
         {
@@ -234,14 +277,15 @@ namespace EasyDapper
         public void BeginTransaction()
         {
             var connection = GetOpenConnection();
+            if (connection.State != ConnectionState.Open) connection.Open();
             if (_threadLocalTransaction.Value == null)
             {
                 _threadLocalTransaction.Value = connection.BeginTransaction();
             }
             else
             {
-                var savePointName = string.Format("SavePoint_{0:N}", Guid.NewGuid());
-                ExecuteTransactionCommand(string.Format("SAVE TRANSACTION {0}", savePointName));
+                var savePointName = $"SavePoint_{Guid.NewGuid():N}";
+                ExecuteTransactionCommand($"SAVE TRANSACTION {savePointName}");
                 _threadLocalSavePoints.Value.Push(savePointName);
             }
             _threadLocalTransactionCount.Value++;
@@ -256,7 +300,7 @@ namespace EasyDapper
                 try { _threadLocalTransaction.Value.Commit(); }
                 finally { CleanupTransaction(); }
             }
-            else { _threadLocalSavePoints.Value.Pop(); }
+            else { string dummy; _threadLocalSavePoints.Value.TryPop(out dummy); }
         }
         public void RollbackTransaction()
         {
@@ -265,10 +309,10 @@ namespace EasyDapper
             {
                 if (_threadLocalTransactionCount.Value > 0)
                 {
-                    if (_threadLocalSavePoints.Value.Count > 0)
+                    string savePointName;
+                    if (_threadLocalSavePoints.Value.TryPop(out savePointName))
                     {
-                        var savePointName = _threadLocalSavePoints.Value.Pop();
-                        ExecuteTransactionCommand(string.Format("ROLLBACK TRANSACTION {0}", savePointName));
+                        ExecuteTransactionCommand($"ROLLBACK TRANSACTION {savePointName}");
                     }
                     else { _threadLocalTransaction.Value.Rollback(); }
                 }
@@ -317,50 +361,50 @@ namespace EasyDapper
                 _threadLocalTransaction?.Dispose();
                 _threadLocalTransactionCount?.Dispose();
                 _threadLocalSavePoints?.Dispose();
+                _externalConnection?.Dispose();
             }
             _disposed = true;
         }
-        ~ConnectionManager() { Dispose(false); }
     }
-    internal class QueryCache
+    internal class QueryCache : IDisposable
     {
-        private static readonly DapperServiceLruCache<Type, string> InsertQueryCache = new DapperServiceLruCache<Type, string>(500);
-        private static readonly DapperServiceLruCache<Type, string> UpdateQueryCache = new DapperServiceLruCache<Type, string>(500);
-        private static readonly DapperServiceLruCache<Type, string> DeleteQueryCache = new DapperServiceLruCache<Type, string>(500);
-        private static readonly DapperServiceLruCache<Type, string> GetByIdQueryCache = new DapperServiceLruCache<Type, string>(500);
-        private static readonly DapperServiceLruCache<Type, List<PropertyInfo>> PrimaryKeyCache = new DapperServiceLruCache<Type, List<PropertyInfo>>(200);
-        private static readonly DapperServiceLruCache<Type, PropertyInfo> IdentityPropertyCache = new DapperServiceLruCache<Type, PropertyInfo>(200);
-        private static readonly DapperServiceLruCache<string, string> TableNameCache = new DapperServiceLruCache<string, string>(100);
-        private static readonly DapperServiceLruCache<string, string> ColumnNameCache = new DapperServiceLruCache<string, string>(500);
+        private readonly LockFreeLruCacheDapperService<Type, string> InsertQueryCache = new LockFreeLruCacheDapperService<Type, string>(500);
+        private readonly LockFreeLruCacheDapperService<Type, string> UpdateQueryCache = new LockFreeLruCacheDapperService<Type, string>(500);
+        private readonly LockFreeLruCacheDapperService<Type, string> DeleteQueryCache = new LockFreeLruCacheDapperService<Type, string>(500);
+        private readonly LockFreeLruCacheDapperService<Type, string> GetByIdQueryCache = new LockFreeLruCacheDapperService<Type, string>(500);
+        private readonly LockFreeLruCacheDapperService<Type, List<PropertyInfo>> PrimaryKeyCache = new LockFreeLruCacheDapperService<Type, List<PropertyInfo>>(200);
+        private readonly LockFreeLruCacheDapperService<Type, PropertyInfo> IdentityPropertyCache = new LockFreeLruCacheDapperService<Type, PropertyInfo>(200);
+        private readonly LockFreeLruCacheDapperService<string, string> TableNameCache = new LockFreeLruCacheDapperService<string, string>(100);
+        private readonly LockFreeLruCacheDapperService<string, string> ColumnNameCache = new LockFreeLruCacheDapperService<string, string>(500);
         private const string DEFAULT_SCHEMA = "dbo";
         private static readonly char[] InvalidIdentifierChars = new[] { ';', '-', '-', '/', '*', '\'', '"', '[', ']' };
         private string SanitizeIdentifier(string identifier)
         {
             if (string.IsNullOrWhiteSpace(identifier)) throw new ArgumentException("Identifier cannot be null or empty.", "identifier");
             if (identifier.IndexOfAny(InvalidIdentifierChars) >= 0) throw new ArgumentException("Identifier contains invalid characters.", "identifier");
-            return identifier;
+            return identifier.Replace("]", "]]");
         }
         public string GetTableName<T>()
         {
             var type = typeof(T);
-            var cacheKey = string.Format("{0}_{1}", type.FullName, DEFAULT_SCHEMA);
+            var cacheKey = $"{type.FullName}_{DEFAULT_SCHEMA}";
             return TableNameCache.GetOrAdd(cacheKey, key =>
             {
                 var tableAttr = type.GetCustomAttribute<TableAttribute>(true);
                 var schema = tableAttr != null && !string.IsNullOrWhiteSpace(tableAttr.Schema) ? SanitizeIdentifier(tableAttr.Schema) : DEFAULT_SCHEMA;
                 var name = tableAttr != null && !string.IsNullOrWhiteSpace(tableAttr.TableName) ? SanitizeIdentifier(tableAttr.TableName) : SanitizeIdentifier(type.Name);
-                return string.Format("[{0}].[{1}]", schema, name);
+                return $"[{schema}].[{name}]";
             });
         }
         public string GetColumnName(PropertyInfo property)
         {
             if (property == null) throw new ArgumentNullException("property");
-            var cacheKey = string.Format("{0}_{1}", property.DeclaringType?.FullName, property.Name);
+            var cacheKey = $"{property.DeclaringType?.FullName}_{property.Name}";
             return ColumnNameCache.GetOrAdd(cacheKey, key =>
             {
                 var columnAttr = property.GetCustomAttribute<ColumnAttribute>(true);
                 var name = columnAttr != null && !string.IsNullOrWhiteSpace(columnAttr.ColumnName) ? SanitizeIdentifier(columnAttr.ColumnName) : SanitizeIdentifier(property.Name);
-                return string.Format("[{0}]", name);
+                return $"[{name}]";
             });
         }
         public List<PropertyInfo> GetPrimaryKeyProperties<T>()
@@ -368,7 +412,7 @@ namespace EasyDapper
             return PrimaryKeyCache.GetOrAdd(typeof(T), type =>
             {
                 var properties = type.GetProperties().Where(p => p.GetCustomAttribute<PrimaryKeyAttribute>(true) != null).ToList();
-                if (properties.Count == 0) throw new InvalidOperationException(string.Format("No primary key defined for {0}", type.Name));
+                if (properties.Count == 0) throw new InvalidOperationException($"No primary key defined for {type.Name}");
                 var identityPk = properties.Count(p => p.GetCustomAttribute<IdentityAttribute>(true) != null);
                 if (identityPk > 1) throw new InvalidOperationException("Multiple Identity primary keys are not supported");
                 return properties;
@@ -387,10 +431,10 @@ namespace EasyDapper
             var tableName = GetTableName<T>();
             var properties = GetInsertProperties<T>();
             var columns = string.Join(", ", properties.Select(GetColumnName));
-            var values = string.Join(", ", properties.Select(p => string.Format("@{0}", p.Name)));
+            var values = string.Join(", ", properties.Select(p => $"@{p.Name}"));
             var identityProp = GetIdentityProperty<T>();
-            if (identityProp != null) { return string.Format(@"INSERT INTO {0} ({1}) VALUES ({2}); SELECT CAST(SCOPE_IDENTITY() AS INT);", tableName, columns, values); }
-            return string.Format("INSERT INTO {0} ({1}) VALUES ({2})", tableName, columns, values);
+            if (identityProp != null) { return $"INSERT INTO {tableName} ({columns}) VALUES ({values}); SELECT CAST(SCOPE_IDENTITY() AS INT);"; }
+            return $"INSERT INTO {tableName} ({columns}) VALUES ({values})";
         }
         private string BuildUpdateQuery<T>(Type type)
         {
@@ -399,33 +443,44 @@ namespace EasyDapper
             var properties = typeof(T).GetProperties().Where(p => !IsPrimaryKey(p) && !IsIdentity(p)).ToList();
             if (properties.Count > 0)
             {
-                var setClause = string.Join(", ", properties.Select(p => string.Format("{0} = @{1}", GetColumnName(p), p.Name)));
-                var whereClause = string.Join(" AND ", primaryKeys.Select(p => string.Format("{0} = @{1}", GetColumnName(p), p.Name)));
-                return string.Format("UPDATE {0} SET {1} WHERE {2}", tableName, setClause, whereClause);
+                var setClause = string.Join(", ", properties.Select(p => $"{GetColumnName(p)} = @{p.Name}"));
+                var whereClause = string.Join(" AND ", primaryKeys.Select(p => $"{GetColumnName(p)} = @{p.Name}"));
+                return $"UPDATE {tableName} SET {setClause} WHERE {whereClause}";
             }
             var updatablePrimaryKeys = primaryKeys.Where(p => !IsIdentity(p)).ToList();
-            if (updatablePrimaryKeys.Count == 0) throw new InvalidOperationException(string.Format("Cannot update type {0}. All properties are identity primary keys.", type.Name));
-            var setClauseForPrimaryKeys = string.Join(", ", updatablePrimaryKeys.Select(p => string.Format("{0} = @{1}", GetColumnName(p), p.Name)));
-            var whereClauseForPrimaryKeys = string.Join(" AND ", primaryKeys.Select(p => string.Format("{0} = @old_{1}", GetColumnName(p), p.Name)));
-            return string.Format("UPDATE {0} SET {1} WHERE {2}", tableName, setClauseForPrimaryKeys, whereClauseForPrimaryKeys);
+            if (updatablePrimaryKeys.Count == 0) throw new InvalidOperationException($"Cannot update type {type.Name}. All properties are identity primary keys.");
+            var setClauseForPrimaryKeys = string.Join(", ", updatablePrimaryKeys.Select(p => $"{GetColumnName(p)} = @{p.Name}"));
+            var whereClauseForPrimaryKeys = string.Join(" AND ", primaryKeys.Select(p => $"{GetColumnName(p)} = @old_{p.Name}"));
+            return $"UPDATE {tableName} SET {setClauseForPrimaryKeys} WHERE {whereClauseForPrimaryKeys}";
         }
         private string BuildDeleteQuery<T>(Type type)
         {
             var tableName = GetTableName<T>();
             var primaryKeys = GetPrimaryKeyProperties<T>();
-            var whereClause = string.Join(" AND ", primaryKeys.Select(p => string.Format("{0} = @{1}", GetColumnName(p), p.Name)));
-            return string.Format("DELETE FROM {0} WHERE {1}", tableName, whereClause);
+            var whereClause = string.Join(" AND ", primaryKeys.Select(p => $"{GetColumnName(p)} = @{p.Name}"));
+            return $"DELETE FROM {tableName} WHERE {whereClause}";
         }
         private string BuildGetByIdQuery<T>(Type type)
         {
             var tableName = GetTableName<T>();
             var primaryKey = GetPrimaryKeyProperties<T>().Single();
-            var columns = string.Join(", ", typeof(T).GetProperties().Select(p => string.Format("{0} AS {1}", GetColumnName(p), p.Name)));
-            return string.Format("SELECT {0} FROM {1} WHERE {2} = @Id", columns, tableName, GetColumnName(primaryKey));
+            var columns = string.Join(", ", typeof(T).GetProperties().Select(p => $"{GetColumnName(p)} AS {p.Name}"));
+            return $"SELECT {columns} FROM {tableName} WHERE {GetColumnName(primaryKey)} = @Id";
         }
         private IEnumerable<PropertyInfo> GetInsertProperties<T>() => typeof(T).GetProperties().Where(p => p.GetCustomAttribute<IdentityAttribute>(true) == null);
         private bool IsPrimaryKey(PropertyInfo property) => property.GetCustomAttribute<PrimaryKeyAttribute>(true) != null;
         private bool IsIdentity(PropertyInfo property) => property.GetCustomAttribute<IdentityAttribute>(true) != null;
+        public void Dispose()
+        {
+            InsertQueryCache?.Dispose();
+            UpdateQueryCache?.Dispose();
+            DeleteQueryCache?.Dispose();
+            GetByIdQueryCache?.Dispose();
+            PrimaryKeyCache?.Dispose();
+            IdentityPropertyCache?.Dispose();
+            TableNameCache?.Dispose();
+            ColumnNameCache?.Dispose();
+        }
     }
     internal class CrudOperations
     {
@@ -609,7 +664,7 @@ namespace EasyDapper
             var connection = _connectionManager.GetOpenConnection();
             var primaryKeys = _queryCache.GetPrimaryKeyProperties<T>();
             var oldParams = new DynamicParameters();
-            foreach (var pk in primaryKeys) oldParams.Add(string.Format("old_{0}", pk.Name), pk.GetValue(entity));
+            foreach (var pk in primaryKeys) oldParams.Add($"old_{pk.Name}", pk.GetValue(entity));
             var newParams = new DynamicParameters();
             foreach (var pk in primaryKeys) if (!IsIdentity(pk)) newParams.Add(pk.Name, pk.GetValue(entity));
             var combinedParams = new DynamicParameters();
@@ -622,7 +677,7 @@ namespace EasyDapper
             var connection = _connectionManager.GetOpenConnection();
             var primaryKeys = _queryCache.GetPrimaryKeyProperties<T>();
             var oldParams = new DynamicParameters();
-            foreach (var pk in primaryKeys) oldParams.Add(string.Format("old_{0}", pk.Name), pk.GetValue(entity));
+            foreach (var pk in primaryKeys) oldParams.Add($"old_{pk.Name}", pk.GetValue(entity));
             var newParams = new DynamicParameters();
             foreach (var pk in primaryKeys) if (!IsIdentity(pk)) newParams.Add(pk.Name, pk.GetValue(entity));
             var combinedParams = new DynamicParameters();
@@ -634,8 +689,10 @@ namespace EasyDapper
         private void MergeDynamicParameters(DynamicParameters source, DynamicParameters destination)
         {
             if (source == null) return;
-            var template = source as DynamicParameters;
-            if (template != null) foreach (var param in template.ParameterNames) destination.Add(param, template.Get<object>(param));
+            foreach (var paramName in source.ParameterNames)
+            {
+                destination.Add(paramName, source.Get<object>(paramName));
+            }
         }
         private bool IsIdentity(PropertyInfo property) => property.GetCustomAttribute<IdentityAttribute>(true) != null;
     }
@@ -739,7 +796,7 @@ namespace EasyDapper
                         object convertedValue = Convert.ChangeType(identities[i], identityProp.PropertyType);
                         identityProp.SetValue(entities[i], convertedValue);
                     }
-                    catch (Exception ex) { throw new InvalidOperationException(string.Format("Failed to set identity value for entity at index {0}. Identity value: {1}, Target type: {2}", i, identities[i], identityProp.PropertyType), ex); }
+                    catch (Exception ex) { throw new InvalidOperationException($"Failed to set identity value for entity at index {i}. Identity value: {identities[i]}, Target type: {identityProp.PropertyType}", ex); }
                 }
             }
             return entities.Count;
@@ -757,59 +814,65 @@ namespace EasyDapper
                         object convertedValue = Convert.ChangeType(identities[i], identityProp.PropertyType);
                         identityProp.SetValue(entities[i], convertedValue);
                     }
-                    catch (Exception ex) { throw new InvalidOperationException(string.Format("Failed to set identity value for entity at index {0}. Identity value: {1}, Target type: {2}", i, identities[i], identityProp.PropertyType), ex); }
+                    catch (Exception ex) { throw new InvalidOperationException($"Failed to set identity value for entity at index {i}. Identity value: {identities[i]}, Target type: {identityProp.PropertyType}", ex); }
                 }
             }
             return entities.Count;
         }
         private List<object> InsertBulkCopyWithIdentity<T>(IEnumerable<T> entities) where T : class
         {
-            var random = new Random().Next(10, 100000000);
-            var tempTableName = string.Format("##Temp_{0}", random);
+            var tempTableName = $"##Temp_{Guid.NewGuid():N}";
             var identities = new List<object>();
             var connection = (SqlConnection)_connectionManager.GetOpenConnection();
             try
             {
-                CreateTempTable<T>(tempTableName, connection);
-                BulkCopyToTempTable<T>(entities, tempTableName, connection);
-                identities = InsertFromTempAndRetrieveIdentities<T>(tempTableName, connection);
+                CreateTempTableWithOrderColumn<T>(tempTableName, connection);
+                BulkCopyToTempTableWithOrder<T>(entities, tempTableName, connection);
+                identities = InsertFromTempAndRetrieveIdentitiesWithOrder<T>(tempTableName, connection);
             }
             finally { DropTempTable(tempTableName, connection); }
             return identities;
         }
         private async Task<List<object>> InsertBulkCopyWithIdentityAsync<T>(IEnumerable<T> entities, CancellationToken cancellationToken) where T : class
         {
-            var random = new Random().Next(10, 100000000);
-            var tempTableName = string.Format("##Temp_{0}", random);
+            var tempTableName = $"##Temp_{Guid.NewGuid():N}";
             var identities = new List<object>();
             var connection = (SqlConnection)await _connectionManager.GetOpenConnectionAsync();
             try
             {
-                await CreateTempTableAsync<T>(tempTableName, connection, cancellationToken);
-                await BulkCopyToTempTableAsync<T>(entities, tempTableName, connection, cancellationToken);
-                identities = await InsertFromTempAndRetrieveIdentitiesAsync<T>(tempTableName, connection, cancellationToken);
+                await CreateTempTableWithOrderColumnAsync<T>(tempTableName, connection, cancellationToken);
+                await BulkCopyToTempTableWithOrderAsync<T>(entities, tempTableName, connection, cancellationToken);
+                identities = await InsertFromTempAndRetrieveIdentitiesWithOrderAsync<T>(tempTableName, connection, cancellationToken);
             }
             finally { await DropTempTableAsync(tempTableName, connection, cancellationToken); }
             return identities;
         }
-        private void CreateTempTable<T>(string tempTableName, SqlConnection connection)
+        private void CreateTempTableWithOrderColumn<T>(string tempTableName, SqlConnection connection)
         {
             var properties = GetInsertProperties<T>();
             var columns = string.Join(", ", properties.Select(p => _queryCache.GetColumnName(p)));
-            var createTempTableQuery = string.Format("SELECT TOP 0 {0} INTO {1} FROM {2};", columns, tempTableName, _queryCache.GetTableName<T>());
+            var createTempTableQuery = $"SELECT TOP 0 {columns}, 0 AS [TempOrder] INTO {tempTableName} FROM {_queryCache.GetTableName<T>()};";
             _sqlBuilder.ExecuteRawCommand(connection, _connectionManager.CurrentTransaction, createTempTableQuery);
         }
-        private async Task CreateTempTableAsync<T>(string tempTableName, SqlConnection connection, CancellationToken cancellationToken)
+        private async Task CreateTempTableWithOrderColumnAsync<T>(string tempTableName, SqlConnection connection, CancellationToken cancellationToken)
         {
             var properties = GetInsertProperties<T>();
             var columns = string.Join(", ", properties.Select(p => _queryCache.GetColumnName(p)));
-            var createTempTableQuery = string.Format("SELECT TOP 0 {0} INTO {1} FROM {2};", columns, tempTableName, _queryCache.GetTableName<T>());
+            var createTempTableQuery = $"SELECT TOP 0 {columns}, 0 AS [TempOrder] INTO {tempTableName} FROM {_queryCache.GetTableName<T>()};";
             await connection.ExecuteAsync(new CommandDefinition(createTempTableQuery, transaction: _connectionManager.CurrentTransaction, cancellationToken: cancellationToken));
         }
-        private void BulkCopyToTempTable<T>(IEnumerable<T> entities, string tempTableName, SqlConnection connection)
+        private void BulkCopyToTempTableWithOrder<T>(IEnumerable<T> entities, string tempTableName, SqlConnection connection)
         {
             var properties = GetInsertProperties<T>();
             var dataTable = _sqlBuilder.ToDataTable(entities, properties);
+
+            // اضافه کردن ستون ترتیب
+            dataTable.Columns.Add("TempOrder", typeof(int));
+            for (int i = 0; i < dataTable.Rows.Count; i++)
+            {
+                dataTable.Rows[i]["TempOrder"] = i;
+            }
+
             using (var reader = dataTable.CreateDataReader())
             using (var bulkCopy = new SqlBulkCopy(connection, SqlBulkCopyOptions.Default, (SqlTransaction)_connectionManager.CurrentTransaction))
             {
@@ -826,15 +889,27 @@ namespace EasyDapper
                     {
                         var dbColumnName = _queryCache.GetColumnName(property);
                         bulkCopy.ColumnMappings.Add(column.ColumnName, dbColumnName.Trim('[', ']'));
+                    }
+                    else if (column.ColumnName == "TempOrder")
+                    {
+                        bulkCopy.ColumnMappings.Add(column.ColumnName, "TempOrder");
                     }
                 }
                 bulkCopy.WriteToServer(reader);
             }
         }
-        private async Task BulkCopyToTempTableAsync<T>(IEnumerable<T> entities, string tempTableName, SqlConnection connection, CancellationToken cancellationToken)
+        private async Task BulkCopyToTempTableWithOrderAsync<T>(IEnumerable<T> entities, string tempTableName, SqlConnection connection, CancellationToken cancellationToken)
         {
             var properties = GetInsertProperties<T>();
             var dataTable = _sqlBuilder.ToDataTable(entities, properties);
+
+            // اضافه کردن ستون ترتیب
+            dataTable.Columns.Add("TempOrder", typeof(int));
+            for (int i = 0; i < dataTable.Rows.Count; i++)
+            {
+                dataTable.Rows[i]["TempOrder"] = i;
+            }
+
             using (var reader = dataTable.CreateDataReader())
             using (var bulkCopy = new SqlBulkCopy(connection, SqlBulkCopyOptions.Default, (SqlTransaction)_connectionManager.CurrentTransaction))
             {
@@ -852,48 +927,216 @@ namespace EasyDapper
                         var dbColumnName = _queryCache.GetColumnName(property);
                         bulkCopy.ColumnMappings.Add(column.ColumnName, dbColumnName.Trim('[', ']'));
                     }
+                    else if (column.ColumnName == "TempOrder")
+                    {
+                        bulkCopy.ColumnMappings.Add(column.ColumnName, "TempOrder");
+                    }
                 }
                 await bulkCopy.WriteToServerAsync(reader, cancellationToken);
             }
         }
-        private List<object> InsertFromTempAndRetrieveIdentities<T>(string tempTableName, SqlConnection connection) where T : class
+
+        //private List<object> InsertFromTempAndRetrieveIdentitiesWithOrder<T>(string tempTableName, SqlConnection connection) where T : class
+        //{
+        //    var identityProp = _queryCache.GetIdentityProperty<T>();
+        //    var properties = GetInsertProperties<T>();
+        //    var identities = new List<object>();
+        //    var identityColumnName = _queryCache.GetColumnName(identityProp).Trim('[', ']');
+        //    var columnList = string.Join(", ", properties.Select(p => _queryCache.GetColumnName(p)));
+
+        //    var insertAndRetrieveQuery = $@"
+        //DECLARE @TempIds TABLE (Id BIGINT, TempOrder INT);
+        //DECLARE @CurrentTempOrder INT;
+        //DECLARE @CurrentId BIGINT;
+
+        //DECLARE temp_cursor CURSOR LOCAL FAST_FORWARD FOR
+        //SELECT TempOrder FROM {tempTableName} ORDER BY TempOrder;
+
+        //OPEN temp_cursor;
+        //FETCH NEXT FROM temp_cursor INTO @CurrentTempOrder;
+
+        //WHILE @@FETCH_STATUS = 0
+        //BEGIN
+        //    INSERT INTO {_queryCache.GetTableName<T>()} ({columnList})
+        //    SELECT {columnList} FROM {tempTableName} WHERE TempOrder = @CurrentTempOrder;
+
+        //    SET @CurrentId = SCOPE_IDENTITY();
+
+        //    INSERT INTO @TempIds (Id, TempOrder) VALUES (@CurrentId, @CurrentTempOrder);
+
+        //    FETCH NEXT FROM temp_cursor INTO @CurrentTempOrder;
+        //END
+
+        //CLOSE temp_cursor;
+        //DEALLOCATE temp_cursor;
+
+        //SELECT Id FROM @TempIds ORDER BY TempOrder;";
+
+        //    using (var command = new SqlCommand(insertAndRetrieveQuery, connection, (SqlTransaction)_connectionManager.CurrentTransaction))
+        //    using (var reader = command.ExecuteReader())
+        //    {
+        //        while (reader.Read()) identities.Add(reader.GetValue(0));
+        //    }
+        //    return identities;
+        //}
+
+        //private async Task<List<object>> InsertFromTempAndRetrieveIdentitiesWithOrderAsync<T>(string tempTableName, SqlConnection connection, CancellationToken cancellationToken) where T : class
+        //{
+        //    var identityProp = _queryCache.GetIdentityProperty<T>();
+        //    var properties = GetInsertProperties<T>();
+        //    var identities = new List<object>();
+        //    var identityColumnName = _queryCache.GetColumnName(identityProp).Trim('[', ']');
+        //    var columnList = string.Join(", ", properties.Select(p => _queryCache.GetColumnName(p)));
+
+        //    var insertAndRetrieveQuery = $@"
+        //DECLARE @TempIds TABLE (Id BIGINT, TempOrder INT);
+        //DECLARE @CurrentTempOrder INT;
+        //DECLARE @CurrentId BIGINT;
+
+        //DECLARE temp_cursor CURSOR LOCAL FAST_FORWARD FOR
+        //SELECT TempOrder FROM {tempTableName} ORDER BY TempOrder;
+
+        //OPEN temp_cursor;
+        //FETCH NEXT FROM temp_cursor INTO @CurrentTempOrder;
+
+        //WHILE @@FETCH_STATUS = 0
+        //BEGIN
+        //    INSERT INTO {_queryCache.GetTableName<T>()} ({columnList})
+        //    SELECT {columnList} FROM {tempTableName} WHERE TempOrder = @CurrentTempOrder;
+
+        //    SET @CurrentId = SCOPE_IDENTITY();
+
+        //    INSERT INTO @TempIds (Id, TempOrder) VALUES (@CurrentId, @CurrentTempOrder);
+
+        //    FETCH NEXT FROM temp_cursor INTO @CurrentTempOrder;
+        //END
+
+        //CLOSE temp_cursor;
+        //DEALLOCATE temp_cursor;
+
+        //SELECT Id FROM @TempIds ORDER BY TempOrder;";
+
+        //    using (var command = new SqlCommand(insertAndRetrieveQuery, connection, (SqlTransaction)_connectionManager.CurrentTransaction))
+        //    using (var reader = await command.ExecuteReaderAsync(cancellationToken))
+        //    {
+        //        while (await reader.ReadAsync(cancellationToken)) identities.Add(reader.GetValue(0));
+        //    }
+        //    return identities;
+        //}
+        private List<object> InsertFromTempAndRetrieveIdentitiesWithOrder<T>(string tempTableName, SqlConnection connection) where T : class
         {
             var identityProp = _queryCache.GetIdentityProperty<T>();
             var properties = GetInsertProperties<T>();
-            var identities = new List<object>();
+            var tableName = _queryCache.GetTableName<T>();
             var identityColumnName = _queryCache.GetColumnName(identityProp).Trim('[', ']');
             var columnList = string.Join(", ", properties.Select(p => _queryCache.GetColumnName(p)));
-            var insertAndRetrieveQuery = string.Format(@"DECLARE @TempIds TABLE (Id BIGINT); INSERT INTO {0} ({1}) OUTPUT INSERTED.{2} INTO @TempIds SELECT {1} FROM {3}; SELECT Id FROM @TempIds;", _queryCache.GetTableName<T>(), columnList, identityColumnName, tempTableName);
-            using (var command = new SqlCommand(insertAndRetrieveQuery, connection, (SqlTransaction)_connectionManager.CurrentTransaction))
-            using (var reader = command.ExecuteReader())
+            var selectColumns = string.Join(", ", properties.Select(p => _queryCache.GetColumnName(p).Trim('[', ']')));
+
+            var insertQuery = $@"
+        -- ایجاد جدول برای ذخیره خروجی با حفظ ترتیب اصلی
+        CREATE TABLE #OutputIds (TempOrder INT, Id BIGINT);
+        
+        -- درج داده‌ها و ذخیره همزمان TempOrder و Identity
+        INSERT INTO {tableName} ({columnList})
+        OUTPUT INSERTED.{identityColumnName} INTO #OutputIds(Id)
+        SELECT {selectColumns}
+        FROM {tempTableName}
+        ORDER BY TempOrder;
+        
+        -- به روزرسانی TempOrder در جدول خروجی بر اساس ترتیب درج
+        ;WITH OrderedIds AS (
+            SELECT ROW_NUMBER() OVER (ORDER BY (SELECT NULL)) as RowNum, Id
+            FROM #OutputIds
+        ),
+        OrderedTemp AS (
+            SELECT ROW_NUMBER() OVER (ORDER BY TempOrder) as RowNum, TempOrder
+            FROM {tempTableName}
+        )
+        UPDATE #OutputIds
+        SET TempOrder = ot.TempOrder
+        FROM #OutputIds oi
+        INNER JOIN OrderedIds oid ON oi.Id = oid.Id
+        INNER JOIN OrderedTemp ot ON oid.RowNum = ot.RowNum;
+        
+        -- بازگرداندن نتایج بر اساس ترتیب اصلی
+        SELECT Id FROM #OutputIds ORDER BY TempOrder;
+        
+        -- پاکسازی
+        DROP TABLE #OutputIds;";
+
+            var identities = new List<object>();
+            using (var command = new SqlCommand(insertQuery, connection, (SqlTransaction)_connectionManager.CurrentTransaction))
             {
-                while (reader.Read()) identities.Add(reader.GetValue(0));
+                using (var reader = command.ExecuteReader())
+                {
+                    while (reader.Read())
+                    {
+                        identities.Add(reader.GetValue(0));
+                    }
+                }
             }
+
             return identities;
         }
-        private async Task<List<object>> InsertFromTempAndRetrieveIdentitiesAsync<T>(string tempTableName, SqlConnection connection, CancellationToken cancellationToken) where T : class
+
+        private async Task<List<object>> InsertFromTempAndRetrieveIdentitiesWithOrderAsync<T>(string tempTableName, SqlConnection connection, CancellationToken cancellationToken) where T : class
         {
             var identityProp = _queryCache.GetIdentityProperty<T>();
             var properties = GetInsertProperties<T>();
-            var identities = new List<object>();
+            var tableName = _queryCache.GetTableName<T>();
             var identityColumnName = _queryCache.GetColumnName(identityProp).Trim('[', ']');
             var columnList = string.Join(", ", properties.Select(p => _queryCache.GetColumnName(p)));
-            var insertAndRetrieveQuery = string.Format(@"DECLARE @TempIds TABLE (Id BIGINT); INSERT INTO {0} ({1}) OUTPUT INSERTED.{2} INTO @TempIds SELECT {1} FROM {3}; SELECT Id FROM @TempIds;", _queryCache.GetTableName<T>(), columnList, identityColumnName, tempTableName);
-            using (var command = new SqlCommand(insertAndRetrieveQuery, connection, (SqlTransaction)_connectionManager.CurrentTransaction))
-            using (var reader = await command.ExecuteReaderAsync(cancellationToken))
+            var selectColumns = string.Join(", ", properties.Select(p => _queryCache.GetColumnName(p).Trim('[', ']')));
+
+            var insertQuery = $@"
+        CREATE TABLE #OutputIds (TempOrder INT, Id BIGINT);
+        
+        INSERT INTO {tableName} ({columnList})
+        OUTPUT INSERTED.{identityColumnName} INTO #OutputIds(Id)
+        SELECT {selectColumns}
+        FROM {tempTableName}
+        ORDER BY TempOrder;
+        
+        ;WITH OrderedIds AS (
+            SELECT ROW_NUMBER() OVER (ORDER BY (SELECT NULL)) as RowNum, Id
+            FROM #OutputIds
+        ),
+        OrderedTemp AS (
+            SELECT ROW_NUMBER() OVER (ORDER BY TempOrder) as RowNum, TempOrder
+            FROM {tempTableName}
+        )
+        UPDATE #OutputIds
+        SET TempOrder = ot.TempOrder
+        FROM #OutputIds oi
+        INNER JOIN OrderedIds oid ON oi.Id = oid.Id
+        INNER JOIN OrderedTemp ot ON oid.RowNum = ot.RowNum;
+        
+        SELECT Id FROM #OutputIds ORDER BY TempOrder;
+        
+        DROP TABLE #OutputIds;";
+
+            var identities = new List<object>();
+            using (var command = new SqlCommand(insertQuery, connection, (SqlTransaction)_connectionManager.CurrentTransaction))
             {
-                while (await reader.ReadAsync(cancellationToken)) identities.Add(reader.GetValue(0));
+                using (var reader = await command.ExecuteReaderAsync(cancellationToken))
+                {
+                    while (await reader.ReadAsync(cancellationToken))
+                    {
+                        identities.Add(reader.GetValue(0));
+                    }
+                }
             }
+
             return identities;
         }
         private void DropTempTable(string tempTableName, SqlConnection connection)
         {
-            try { _sqlBuilder.ExecuteRawCommand(connection, _connectionManager.CurrentTransaction, string.Format("DROP TABLE {0}", tempTableName)); }
+            try { _sqlBuilder.ExecuteRawCommand(connection, _connectionManager.CurrentTransaction, $"DROP TABLE {tempTableName}"); }
             catch { }
         }
         private async Task DropTempTableAsync(string tempTableName, SqlConnection connection, CancellationToken cancellationToken)
         {
-            try { await connection.ExecuteAsync(new CommandDefinition(string.Format("DROP TABLE {0}", tempTableName), transaction: _connectionManager.CurrentTransaction, cancellationToken: cancellationToken)); }
+            try { await connection.ExecuteAsync(new CommandDefinition($"DROP TABLE {tempTableName}", transaction: _connectionManager.CurrentTransaction, cancellationToken: cancellationToken)); }
             catch { }
         }
         private IEnumerable<PropertyInfo> GetInsertProperties<T>() => typeof(T).GetProperties().Where(p => p.GetCustomAttribute<IdentityAttribute>(true) == null);
@@ -1032,7 +1275,6 @@ namespace EasyDapper
             if (disposing) _attachedEntities.Clear();
             _disposed = true;
         }
-        ~EntityTracker() { Dispose(false); }
     }
     internal class SqlBuilder
     {
@@ -1046,14 +1288,14 @@ namespace EasyDapper
         {
             var tableName = _queryCache.GetTableName<T>();
             var changedProperties = changedProps.Select(p => typeof(T).GetProperty(p)).Where(p => p != null).ToList();
-            var setClause = string.Join(", ", changedProperties.Select(p => string.Format("{0} = @{1}", _queryCache.GetColumnName(p), p.Name)));
-            var whereClause = string.Join(" AND ", primaryKeys.Select(p => string.Format("{0} = @pk_{1}", _queryCache.GetColumnName(p), p.Name)));
-            return string.Format("UPDATE {0} SET {1} WHERE {2}", tableName, setClause, whereClause);
+            var setClause = string.Join(", ", changedProperties.Select(p => $"{_queryCache.GetColumnName(p)} = @{p.Name}"));
+            var whereClause = string.Join(" AND ", primaryKeys.Select(p => $"{_queryCache.GetColumnName(p)} = @pk_{p.Name}"));
+            return $"UPDATE {tableName} SET {setClause} WHERE {whereClause}";
         }
         public DynamicParameters BuildParameters<T>(T entity, List<PropertyInfo> primaryKeys, List<string> changedProps)
         {
             var parameters = new DynamicParameters();
-            foreach (var pk in primaryKeys) parameters.Add(string.Format("pk_{0}", pk.Name), pk.GetValue(entity));
+            foreach (var pk in primaryKeys) parameters.Add($"pk_{pk.Name}", pk.GetValue(entity));
             foreach (var propName in changedProps)
             {
                 var prop = typeof(T).GetProperty(propName);
@@ -1078,12 +1320,12 @@ namespace EasyDapper
             }
             return parameters;
         }
-        public string BuildScalarFunctionQuery(string functionName, object parameters) => string.Format("SELECT {0}({1})", functionName, BuildParameters(parameters));
-        public string BuildTableFunctionQuery(string functionName, object parameters) => string.Format("SELECT * FROM {0}({1})", functionName, BuildParameters(parameters));
+        public string BuildScalarFunctionQuery(string functionName, object parameters) => $"SELECT {functionName}({BuildParameters(parameters)})";
+        public string BuildTableFunctionQuery(string functionName, object parameters) => $"SELECT * FROM {functionName}({BuildParameters(parameters)})";
         private string BuildParameters(object parameters)
         {
             if (parameters == null) return "";
-            return string.Join(", ", parameters.GetType().GetProperties().Select(p => string.Format("@{0}", p.Name)));
+            return string.Join(", ", parameters.GetType().GetProperties().Select(p => $"@{p.Name}"));
         }
         public void ExecuteRawCommand(IDbConnection connection, IDbTransaction transaction, string commandText)
         {
