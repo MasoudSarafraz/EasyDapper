@@ -16,111 +16,496 @@ using EasyDapper.Attributes;
 
 namespace EasyDapper
 {
-    internal class LockFreeLruCacheDapperService<TKey, TValue>
+
+    //internal class LockFreeLruCacheDapperService<TKey, TValue> : IDisposable
+    //{
+    //    private readonly int _capacity;
+    //    private readonly ConcurrentDictionary<TKey, LruNode> _nodes;
+    //    private readonly object _evictionLock = new object();
+    //    private volatile bool _evictionInProgress;
+    //    private int _lastEvictionSize;
+
+    //    public LockFreeLruCacheDapperService(int capacity)
+    //    {
+    //        if (capacity <= 0) throw new ArgumentOutOfRangeException("capacity");
+    //        _capacity = capacity;
+    //        _nodes = new ConcurrentDictionary<TKey, LruNode>();
+    //        _evictionInProgress = false;
+    //        _lastEvictionSize = 0;
+    //    }
+
+    //    public TValue GetOrAdd(TKey key, Func<TKey, TValue> valueFactory)
+    //    {
+    //        if (key == null) throw new ArgumentNullException("key");
+    //        if (valueFactory == null) throw new ArgumentNullException("valueFactory");
+
+    //        var spinWait = new SpinWait();
+    //        while (true)
+    //        {
+    //            LruNode node;
+    //            if (_nodes.TryGetValue(key, out node))
+    //            {
+    //                Interlocked.Increment(ref node.AccessCount);
+    //                node.LastAccess = DateTime.UtcNow;
+    //                return node.Value;
+    //            }
+
+    //            var value = valueFactory(key);
+    //            node = new LruNode { Value = value, AccessCount = 1, LastAccess = DateTime.UtcNow };
+
+    //            if (_nodes.TryAdd(key, node))
+    //            {
+    //                SmartEviction();
+    //                return value;
+    //            }
+    //            spinWait.SpinOnce();
+    //        }
+    //    }
+
+    //    public bool TryGet(TKey key, out TValue value)
+    //    {
+    //        if (_nodes.TryGetValue(key, out var node))
+    //        {
+    //            Interlocked.Increment(ref node.AccessCount);
+    //            node.LastAccess = DateTime.UtcNow;
+    //            value = node.Value;
+    //            return true;
+    //        }
+
+    //        value = default(TValue);
+    //        return false;
+    //    }
+
+    //    public bool TryRemove(TKey key)
+    //    {
+    //        LruNode removed;
+    //        return _nodes.TryRemove(key, out removed);
+    //    }
+
+    //    public void Clear()
+    //    {
+    //        _nodes.Clear();
+    //    }
+
+    //    public int Count => _nodes.Count;
+
+    //    private void SmartEviction()
+    //    {
+    //        var currentSize = _nodes.Count;
+    //        if (currentSize <= _capacity * 1.2) return;
+    //        if (_evictionInProgress) return;
+    //        if (currentSize - _lastEvictionSize < 50) return;
+
+    //        lock (_evictionLock)
+    //        {
+    //            if (_evictionInProgress) return;
+    //            _evictionInProgress = true;
+    //        }
+
+    //        try
+    //        {
+    //            PerformEviction();
+    //        }
+    //        finally
+    //        {
+    //            _evictionInProgress = false;
+    //        }
+    //    }
+
+    //    private void PerformEviction()
+    //    {
+    //        var currentSize = _nodes.Count;
+    //        var excess = currentSize - _capacity;
+
+    //        if (excess <= 0)
+    //        {
+    //            _lastEvictionSize = currentSize;
+    //            return;
+    //        }
+    //        var candidates = _nodes.Select(pair => new
+    //        {
+    //            Key = pair.Key,
+    //            AccessCount = pair.Value.AccessCount,
+    //            LastAccess = pair.Value.LastAccess,
+    //            Node = pair.Value
+    //        }).ToList();
+    //        var scoredItems = candidates.Select(item => new
+    //        {
+    //            item.Key,
+    //            Score = CalculateEvictionScore(item.AccessCount, item.LastAccess)
+    //        }).ToList();
+    //        var toRemove = scoredItems
+    //            .OrderBy(x => x.Score)
+    //            .Take(Math.Min(excess, 100)) 
+    //            .Select(x => x.Key)
+    //            .ToList();
+
+    //        foreach (var key in toRemove)
+    //        {
+    //            LruNode removed;
+    //            _nodes.TryRemove(key, out removed);
+    //        }
+
+    //        _lastEvictionSize = _nodes.Count;
+    //    }
+
+    //    private double CalculateEvictionScore(long accessCount, DateTime lastAccess)
+    //    {
+    //        var timeSinceLastAccess = (DateTime.UtcNow - lastAccess).TotalMinutes;
+
+    //        var accessScore = 1.0 / (1.0 + accessCount); 
+    //        var timeScore = timeSinceLastAccess / (60 * 24); 
+
+    //        return 0.7 * accessScore + 0.3 * timeScore;
+    //    }
+    //    public CacheInfo GetCacheInfo()
+    //    {
+    //        var nodes = _nodes.ToArray();
+    //        return new CacheInfo
+    //        {
+    //            Capacity = _capacity,
+    //            CurrentSize = nodes.Length,
+    //            HitRate = nodes.Length > 0 ? nodes.Average(n => n.Value.AccessCount) : 0,
+    //            OldestItem = nodes.Length > 0 ? nodes.Min(n => n.Value.LastAccess) : DateTime.UtcNow,
+    //            NewestItem = nodes.Length > 0 ? nodes.Max(n => n.Value.LastAccess) : DateTime.UtcNow
+    //        };
+    //    }
+
+    //    private class LruNode
+    //    {
+    //        public TValue Value;
+    //        public long AccessCount;
+    //        public DateTime LastAccess;
+    //    }
+
+    //    public class CacheInfo
+    //    {
+    //        public int Capacity { get; set; }
+    //        public int CurrentSize { get; set; }
+    //        public double HitRate { get; set; }
+    //        public DateTime OldestItem { get; set; }
+    //        public DateTime NewestItem { get; set; }
+    //    }
+
+    //    public void Dispose()
+    //    {
+    //        _nodes?.Clear();
+    //    }
+    //}
+    using System;
+    using System.Collections.Concurrent;
+    using System.Collections.Generic;
+    using System.Linq;
+    using System.Threading;
+
+    internal class LockFreeLruCacheDapperService<TKey, TValue> : IDisposable
     {
         private readonly int _capacity;
         private readonly ConcurrentDictionary<TKey, LruNode> _nodes;
-        private readonly ConcurrentStack<TKey> _recentKeys;
-        private readonly Timer _cleanupTimer;
-        private long _totalAccesses;
-        private const int CLEANUP_INTERVAL_MS = 30000;
+        private readonly ConcurrentQueue<AccessRecord> _accessRecords;
+        private readonly int _evictionBatchSize;
+        private readonly double _evictionThresholdFactor;
+        private long _totalAccessCount;
+        private long _lastEvictionSize;
+        private int _evictionInProgress;
 
         public LockFreeLruCacheDapperService(int capacity)
         {
-            if (capacity <= 0) throw new ArgumentOutOfRangeException("capacity");
+            if (capacity <= 0) throw new ArgumentOutOfRangeException(nameof(capacity));
+
             _capacity = capacity;
             _nodes = new ConcurrentDictionary<TKey, LruNode>();
-            _recentKeys = new ConcurrentStack<TKey>();
-            _totalAccesses = 0;
-            _cleanupTimer = new Timer(Cleanup, null, CLEANUP_INTERVAL_MS, CLEANUP_INTERVAL_MS);
+            _accessRecords = new ConcurrentQueue<AccessRecord>();
+            _evictionBatchSize = Math.Max(10, capacity / 20); // 5% of capacity
+            _evictionThresholdFactor = 1.2; // Start eviction at 120% capacity
+            _totalAccessCount = 0;
+            _lastEvictionSize = 0;
+            _evictionInProgress = 0;
         }
 
         public TValue GetOrAdd(TKey key, Func<TKey, TValue> valueFactory)
         {
-            if (key == null) throw new ArgumentNullException("key");
-            if (valueFactory == null) throw new ArgumentNullException("valueFactory");
+            if (key == null) throw new ArgumentNullException(nameof(key));
+            if (valueFactory == null) throw new ArgumentNullException(nameof(valueFactory));
 
             var spinWait = new SpinWait();
             while (true)
             {
-                LruNode node;
-                if (_nodes.TryGetValue(key, out node))
+                // Try to get existing value
+                if (_nodes.TryGetValue(key, out var existingNode))
                 {
-                    Interlocked.Increment(ref node.AccessCount);
-                    Interlocked.Increment(ref _totalAccesses);
-                    _recentKeys.Push(key);
-                    return node.Value;
+                    RecordAccess(key, existingNode);
+                    return existingNode.Value;
                 }
 
+                // Create new value
                 var value = valueFactory(key);
-                node = new LruNode { Value = value, AccessCount = 1 };
-
-                if (_nodes.TryAdd(key, node))
+                var newNode = new LruNode
                 {
-                    Interlocked.Increment(ref _totalAccesses);
-                    _recentKeys.Push(key);
+                    Value = value,
+                    AccessCount = 1,
+                    LastAccess = DateTime.UtcNow.Ticks
+                };
 
-                    if (_nodes.Count > _capacity)
+                // Try to add new node
+                if (_nodes.TryAdd(key, newNode))
+                {
+                    RecordAccess(key, newNode);
+
+                    // Check if eviction is needed
+                    var currentSize = _nodes.Count;
+                    if (currentSize > _capacity * _evictionThresholdFactor)
                     {
-                        Task.Run(() => EvictExcessItems());
+                        TryTriggerEviction();
                     }
+
                     return value;
                 }
+
                 spinWait.SpinOnce();
             }
         }
 
-        private void EvictExcessItems()
+        public bool TryGet(TKey key, out TValue value)
         {
-            try
+            if (_nodes.TryGetValue(key, out var node))
             {
-                var excess = _nodes.Count - _capacity;
-                if (excess <= 0) return;
-
-                var candidates = new List<KeyValuePair<TKey, long>>();
-                foreach (var pair in _nodes)
-                {
-                    var accessCount = Interlocked.Read(ref pair.Value.AccessCount);
-                    candidates.Add(new KeyValuePair<TKey, long>(pair.Key, accessCount));
-                }
-
-                var toRemove = candidates.OrderBy(x => x.Value)
-                                       .Take(excess)
-                                       .Select(x => x.Key)
-                                       .ToList();
-
-                foreach (var key in toRemove)
-                {
-                    LruNode removed;
-                    _nodes.TryRemove(key, out removed);
-                }
+                RecordAccess(key, node);
+                value = node.Value;
+                return true;
             }
-            catch { }
+
+            value = default(TValue);
+            return false;
         }
 
-        private void Cleanup(object state)
+        public bool TryRemove(TKey key)
         {
-            try
+            if (_nodes.TryRemove(key, out var removedNode))
             {
-                if (_nodes.Count <= _capacity * 0.8) return;
-                EvictExcessItems();
+                Interlocked.Decrement(ref _totalAccessCount);
+                return true;
             }
-            catch { }
+            return false;
+        }
+
+        public void Clear()
+        {
+            _nodes.Clear();
+            Interlocked.Exchange(ref _totalAccessCount, 0);
+
+            // Clear access records in a thread-safe manner
+            while (_accessRecords.TryDequeue(out _)) { }
+        }
+
+        public int Count => _nodes.Count;
+
+        private void RecordAccess(TKey key, LruNode node)
+        {
+            Interlocked.Increment(ref node.AccessCount);
+            node.LastAccess = DateTime.UtcNow.Ticks;
+
+            // Record access for eviction analysis
+            var record = new AccessRecord
+            {
+                Key = key,
+                Timestamp = DateTime.UtcNow.Ticks
+            };
+            _accessRecords.Enqueue(record);
+
+            Interlocked.Increment(ref _totalAccessCount);
+
+            // Periodic cleanup of access records
+            if (_totalAccessCount % 1000 == 0)
+            {
+                CleanupAccessRecords();
+            }
+        }
+
+        private void TryTriggerEviction()
+        {
+            // Use CAS to ensure only one eviction runs at a time
+            if (Interlocked.CompareExchange(ref _evictionInProgress, 1, 0) == 0)
+            {
+                try
+                {
+                    PerformLockFreeEviction();
+                }
+                finally
+                {
+                    Interlocked.Exchange(ref _evictionInProgress, 0);
+                }
+            }
+        }
+
+        private void PerformLockFreeEviction()
+        {
+            var currentSize = _nodes.Count;
+            if (currentSize <= _capacity) return;
+
+            var excess = currentSize - _capacity;
+            var targetEvictionCount = Math.Min(excess + _evictionBatchSize, currentSize - _capacity);
+
+            if (targetEvictionCount <= 0) return;
+
+            // Collect recent access patterns
+            var recentAccesses = CollectRecentAccessPatterns();
+
+            // Score and select candidates for eviction
+            var candidates = _nodes
+                .Select(pair => new Candidate
+                {
+                    Key = pair.Key,
+                    Node = pair.Value,
+                    Score = CalculateEvictionScore(pair.Value, recentAccesses)
+                })
+                .OrderBy(c => c.Score)
+                .Take(targetEvictionCount)
+                .ToList();
+
+            // Try to remove candidates in a lock-free manner
+            foreach (var candidate in candidates)
+            {
+                // Use CAS-like approach: only remove if the node hasn't been recently accessed
+                if (_nodes.TryGetValue(candidate.Key, out var currentnode))
+                {
+                    var currentAccessCount = currentnode.AccessCount;
+                    var currentLastAccess = currentnode.LastAccess;
+
+                    // Only remove if the node hasn't been accessed since we scored it
+                    if (currentAccessCount == candidate.Node.AccessCount &&
+                        currentLastAccess == candidate.Node.LastAccess)
+                    {
+                        _nodes.TryRemove(candidate.Key, out _);
+                    }
+                }
+            }
+
+            _lastEvictionSize = _nodes.Count;
+            CleanupAccessRecords();
+        }
+
+        private Dictionary<TKey, long> CollectRecentAccessPatterns()
+        {
+            var recentAccesses = new Dictionary<TKey, long>();
+            var now = DateTime.UtcNow.Ticks;
+            var timeWindow = TimeSpan.FromMinutes(5).Ticks;
+
+            // Sample recent access records
+            var records = _accessRecords
+                .Where(r => now - r.Timestamp < timeWindow)
+                .Take(1000)
+                .GroupBy(r => r.Key)
+                .ToDictionary(g => g.Key, g => (long)g.Count());
+
+            return records;
+        }
+
+        private double CalculateEvictionScore(LruNode node, Dictionary<TKey, long> recentAccesses)
+        {
+            var timeSinceLastAccess = (DateTime.UtcNow.Ticks - node.LastAccess) / TimeSpan.TicksPerMinute;
+
+            // Base score on access frequency (lower frequency = higher score)
+            var frequencyScore = 1.0 / (1.0 + node.AccessCount);
+
+            // Time-based score (older = higher score)
+            var timeScore = timeSinceLastAccess / (60 * 24); // Normalize to days
+
+            // Recent activity penalty (recently accessed = lower score)
+            double recentPenalty = 1.0;
+            if (recentAccesses.TryGetValue(GetKeyFromNode(node), out var recentCount))
+            {
+                recentPenalty = 1.0 / (1.0 + recentCount);
+            }
+
+            // Combined score with weights
+            return 0.6 * frequencyScore + 0.3 * timeScore + 0.1 * recentPenalty;
+        }
+
+        private TKey GetKeyFromNode(LruNode node)
+        {
+            // This is a simplification - in real implementation you might need a reverse mapping
+            foreach (var pair in _nodes)
+            {
+                if (pair.Value == node)
+                    return pair.Key;
+            }
+            return default(TKey);
+        }
+
+        private void CleanupAccessRecords()
+        {
+            var now = DateTime.UtcNow.Ticks;
+            var retentionTime = TimeSpan.FromMinutes(10).Ticks;
+
+            // Keep only recent records
+            var recentRecords = _accessRecords
+                .Where(r => now - r.Timestamp < retentionTime)
+                .Take(5000) // Limit total records
+                .ToList();
+
+            // Clear and re-add recent records
+            while (_accessRecords.TryDequeue(out _)) { }
+            foreach (var record in recentRecords)
+            {
+                _accessRecords.Enqueue(record);
+            }
+        }
+
+        public CacheInfo GetCacheInfo()
+        {
+            var nodes = _nodes.ToArray();
+            var accessCounts = nodes.Select(n => n.Value.AccessCount).ToArray();
+            var lastAccessTicks = nodes.Select(n => n.Value.LastAccess).ToArray();
+
+            return new CacheInfo
+            {
+                Capacity = _capacity,
+                CurrentSize = nodes.Length,
+                HitRate = accessCounts.Length > 0 ? accessCounts.Average() : 0,
+                OldestItem = lastAccessTicks.Length > 0 ? new DateTime(lastAccessTicks.Min()) : DateTime.UtcNow,
+                NewestItem = lastAccessTicks.Length > 0 ? new DateTime(lastAccessTicks.Max()) : DateTime.UtcNow,
+                TotalAccesses = Interlocked.Read(ref _totalAccessCount),
+                EvictionInProgress = _evictionInProgress == 1
+            };
         }
 
         private class LruNode
         {
             public TValue Value;
             public long AccessCount;
+            public long LastAccess; // Using ticks for atomic operations
+        }
+
+        private struct AccessRecord
+        {
+            public TKey Key;
+            public long Timestamp;
+        }
+
+        private class Candidate
+        {
+            public TKey Key;
+            public LruNode Node;
+            public double Score;
+        }
+
+        public class CacheInfo
+        {
+            public int Capacity { get; set; }
+            public int CurrentSize { get; set; }
+            public double HitRate { get; set; }
+            public DateTime OldestItem { get; set; }
+            public DateTime NewestItem { get; set; }
+            public long TotalAccesses { get; set; }
+            public bool EvictionInProgress { get; set; }
         }
 
         public void Dispose()
         {
-            _cleanupTimer?.Dispose();
-            _nodes.Clear();
+            Clear();
         }
     }
-
     internal sealed class DapperService : IDapperService, IDisposable
     {
         private readonly ConnectionManager _connectionManager;
