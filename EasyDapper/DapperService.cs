@@ -192,12 +192,6 @@ namespace EasyDapper
     //        _nodes?.Clear();
     //    }
     //}
-    using System;
-    using System.Collections.Concurrent;
-    using System.Collections.Generic;
-    using System.Linq;
-    using System.Threading;
-
     internal class LockFreeLruCacheDapperService<TKey, TValue> : IDisposable
     {
         private readonly int _capacity;
