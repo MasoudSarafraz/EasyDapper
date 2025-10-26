@@ -14,96 +14,313 @@ using System.Runtime.CompilerServices;
 
 namespace EasyDapper
 {
+    //internal sealed class LockFreeLruCache<TKey, TValue>
+    //{
+    //    private sealed class LruNode
+    //    {
+    //        public readonly TKey Key;
+    //        public readonly TValue Value;
+    //        public long Timestamp;
+    //        public LruNode(TKey key, TValue value)
+    //        {
+    //            Key = key;
+    //            Value = value;
+    //            Timestamp = DateTime.UtcNow.Ticks;
+    //        }
+    //    }
+
+    //    private readonly int _capacity;
+    //    private readonly ConcurrentDictionary<TKey, LruNode> _cache;
+    //    private long _lastEvictionTicks;
+
+    //    public LockFreeLruCache(int capacity)
+    //    {
+    //        if (capacity <= 0) throw new ArgumentOutOfRangeException("capacity");
+    //        _capacity = capacity;
+    //        _cache = new ConcurrentDictionary<TKey, LruNode>();
+    //        _lastEvictionTicks = DateTime.UtcNow.Ticks;
+    //    }
+
+    //    public TValue GetOrAdd(TKey key, Func<TKey, TValue> valueFactory)
+    //    {
+    //        if (key == null) throw new ArgumentNullException("key");
+    //        if (valueFactory == null) throw new ArgumentNullException("valueFactory");
+
+    //        LruNode node;
+    //        if (_cache.TryGetValue(key, out node))
+    //        {
+    //            Interlocked.Exchange(ref node.Timestamp, DateTime.UtcNow.Ticks);
+    //            return node.Value;
+    //        }
+
+    //        var newValue = valueFactory(key);
+    //        var newNode = new LruNode(key, newValue);
+
+    //        node = _cache.GetOrAdd(key, newNode);
+
+    //        if (node == newNode)
+    //        {
+    //            TryEvict();
+    //            return newValue;
+    //        }
+
+    //        Interlocked.Exchange(ref node.Timestamp, DateTime.UtcNow.Ticks);
+    //        return node.Value;
+    //    }
+
+    //    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    //    private void TryEvict()
+    //    {
+    //        var currentCount = _cache.Count;
+    //        if (currentCount <= _capacity * 1.2) return;
+
+    //        var nowTicks = DateTime.UtcNow.Ticks;
+    //        var lastEviction = Interlocked.Read(ref _lastEvictionTicks);
+
+    //        if (nowTicks - lastEviction < TimeSpan.TicksPerSecond) return;
+
+    //        if (Interlocked.CompareExchange(ref _lastEvictionTicks, nowTicks, lastEviction) == lastEviction)
+    //        {
+    //            Task.Run(() => EvictOldEntries());
+    //        }
+    //    }
+
+    //    private void EvictOldEntries()
+    //    {
+    //        try
+    //        {
+    //            var currentCount = _cache.Count;
+    //            if (currentCount <= _capacity) return;
+
+    //            var toRemove = _cache.OrderBy(x => x.Value.Timestamp)
+    //                               .Take(currentCount - _capacity)
+    //                               .Select(x => x.Key)
+    //                               .ToList();
+
+    //            foreach (var key in toRemove)
+    //            {
+    //                LruNode removed;
+    //                _cache.TryRemove(key, out removed);
+    //            }
+    //        }
+    //        catch { }
+    //    }
+    //}
     internal sealed class LockFreeLruCache<TKey, TValue>
     {
-        private sealed class LruNode
+        private sealed class Segment
+        {
+            private readonly int _capacity;
+            private readonly ConcurrentDictionary<TKey, CacheItem> _cache;
+            private long _lastEvictionTicks;
+            private int _evictionInProgress;
+            public Segment(int capacity)
+            {
+                _capacity = capacity;
+                _cache = new ConcurrentDictionary<TKey, CacheItem>();
+                _lastEvictionTicks = DateTime.UtcNow.Ticks;
+            }
+            public int Count => _cache.Count;
+            public int Capacity => _capacity;
+            [MethodImpl(MethodImplOptions.AggressiveInlining)]
+            public TValue GetOrAdd(TKey key, Func<TKey, TValue> valueFactory)
+            {
+                CacheItem existingItem;
+                if (_cache.TryGetValue(key, out existingItem))
+                {
+                    existingItem.UpdateAccessTime();
+                    return existingItem.Value;
+                }
+                var newValue = valueFactory(key);
+                var newItem = new CacheItem(key, newValue);
+                var addedItem = _cache.GetOrAdd(key, newItem);
+                if (ReferenceEquals(addedItem, newItem))
+                {
+                    TrySmartEviction();
+                }
+                else
+                {
+                    addedItem.UpdateAccessTime();
+                }
+                return addedItem.Value;
+            }
+
+            public bool TryGetValue(TKey key, out CacheItem item)
+            {
+                if (_cache.TryGetValue(key, out item))
+                {
+                    item.UpdateAccessTime();
+                    return true;
+                }
+                return false;
+            }
+
+            public bool TryAdd(TKey key, TValue value)
+            {
+                var newItem = new CacheItem(key, value);
+                if (_cache.TryAdd(key, newItem))
+                {
+                    TrySmartEviction();
+                    return true;
+                }
+                return false;
+            }
+
+            public bool TryRemove(TKey key)
+            {
+                CacheItem item;
+                return _cache.TryRemove(key, out item);
+            }
+
+            [MethodImpl(MethodImplOptions.AggressiveInlining)]
+            private void TrySmartEviction()
+            {
+                if (_cache.Count <= _capacity) return;
+
+                var nowTicks = DateTime.UtcNow.Ticks;
+                var lastEviction = Interlocked.Read(ref _lastEvictionTicks);
+
+                if (nowTicks - lastEviction < TimeSpan.TicksPerSecond / 10) return;
+
+                if (Interlocked.CompareExchange(ref _lastEvictionTicks, nowTicks, lastEviction) == lastEviction)
+                {
+                    if (Interlocked.CompareExchange(ref _evictionInProgress, 1, 0) == 0)
+                    {
+                        ThreadPool.QueueUserWorkItem(_ => FastEvict());
+                    }
+                }
+            }
+
+            private void FastEvict()
+            {
+                try
+                {
+                    if (_cache.Count <= _capacity) return;
+                    int targetRemovals = Math.Max(5, _cache.Count - _capacity);
+                    var candidates = new List<CacheItem>(targetRemovals * 2);
+                    foreach (var pair in _cache)
+                    {
+                        if (candidates.Count >= targetRemovals * 2) break;
+                        candidates.Add(pair.Value);
+                    }
+                    if (candidates.Count == 0) return;
+                    candidates.Sort((x, y) => x.LastAccessedUtcTicks.CompareTo(y.LastAccessedUtcTicks));
+                    for (int i = 0; i < Math.Min(targetRemovals, candidates.Count); i++)
+                    {
+                        CacheItem ignored;
+                        _cache.TryRemove(candidates[i].Key, out ignored);
+                    }
+                }
+                finally
+                {
+                    Volatile.Write(ref _evictionInProgress, 0);
+                }
+            }
+        }
+
+
+        private sealed class CacheItem
         {
             public readonly TKey Key;
             public readonly TValue Value;
-            public long Timestamp;
-            public LruNode(TKey key, TValue value)
+            public long LastAccessedUtcTicks;
+
+            public CacheItem(TKey key, TValue value)
             {
                 Key = key;
                 Value = value;
-                Timestamp = DateTime.UtcNow.Ticks;
+                LastAccessedUtcTicks = DateTime.UtcNow.Ticks;
+            }
+
+            [MethodImpl(MethodImplOptions.AggressiveInlining)]
+            public void UpdateAccessTime()
+            {
+                var currentTicks = DateTime.UtcNow.Ticks;
+                var lastAccess = Volatile.Read(ref LastAccessedUtcTicks);
+                if (currentTicks - lastAccess > TimeSpan.TicksPerSecond / 10)
+                {
+                    Volatile.Write(ref LastAccessedUtcTicks, currentTicks);
+                }
             }
         }
 
-        private readonly int _capacity;
-        private readonly ConcurrentDictionary<TKey, LruNode> _cache;
-        private long _lastEvictionTicks;
+        private const int SegmentCount = 16;
+        private readonly Segment[] _segments;
+        private readonly int _segmentMask;
 
-        public LockFreeLruCache(int capacity)
+        public LockFreeLruCache(int totalCapacity)
         {
-            if (capacity <= 0) throw new ArgumentOutOfRangeException("capacity");
-            _capacity = capacity;
-            _cache = new ConcurrentDictionary<TKey, LruNode>();
-            _lastEvictionTicks = DateTime.UtcNow.Ticks;
-        }
-
-        public TValue GetOrAdd(TKey key, Func<TKey, TValue> valueFactory)
-        {
-            if (key == null) throw new ArgumentNullException("key");
-            if (valueFactory == null) throw new ArgumentNullException("valueFactory");
-
-            LruNode node;
-            if (_cache.TryGetValue(key, out node))
+            if (totalCapacity <= 0)
+                throw new ArgumentOutOfRangeException(nameof(totalCapacity));
+            _segmentMask = SegmentCount - 1;
+            _segments = new Segment[SegmentCount];
+            var segmentCapacity = Math.Max(1, (totalCapacity + SegmentCount - 1) / SegmentCount);
+            for (int i = 0; i < SegmentCount; i++)
             {
-                Interlocked.Exchange(ref node.Timestamp, DateTime.UtcNow.Ticks);
-                return node.Value;
+                _segments[i] = new Segment(segmentCapacity);
             }
-
-            var newValue = valueFactory(key);
-            var newNode = new LruNode(key, newValue);
-
-            node = _cache.GetOrAdd(key, newNode);
-
-            if (node == newNode)
-            {
-                TryEvict();
-                return newValue;
-            }
-
-            Interlocked.Exchange(ref node.Timestamp, DateTime.UtcNow.Ticks);
-            return node.Value;
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private void TryEvict()
+        public TValue GetOrAdd(TKey key, Func<TKey, TValue> valueFactory)
         {
-            var currentCount = _cache.Count;
-            if (currentCount <= _capacity * 1.2) return;
+            if (key == null) throw new ArgumentNullException(nameof(key));
+            if (valueFactory == null) throw new ArgumentNullException(nameof(valueFactory));
+            var segmentIndex = (key.GetHashCode() & 0x7FFFFFFF) & _segmentMask;
+            return _segments[segmentIndex].GetOrAdd(key, valueFactory);
+        }
 
-            var nowTicks = DateTime.UtcNow.Ticks;
-            var lastEviction = Interlocked.Read(ref _lastEvictionTicks);
-
-            if (nowTicks - lastEviction < TimeSpan.TicksPerSecond) return;
-
-            if (Interlocked.CompareExchange(ref _lastEvictionTicks, nowTicks, lastEviction) == lastEviction)
+        public bool TryGet(TKey key, out TValue value)
+        {
+            if (key == null) throw new ArgumentNullException(nameof(key));
+            var segmentIndex = (key.GetHashCode() & 0x7FFFFFFF) & _segmentMask;
+            CacheItem item;
+            if (_segments[segmentIndex].TryGetValue(key, out item))
             {
-                Task.Run(() => EvictOldEntries());
+                value = item.Value;
+                return true;
+            }
+
+            value = default(TValue);
+            return false;
+        }
+
+        public bool TryAdd(TKey key, TValue value)
+        {
+            if (key == null) throw new ArgumentNullException(nameof(key));
+            //
+            var segmentIndex = (key.GetHashCode() & 0x7FFFFFFF) & _segmentMask;
+            return _segments[segmentIndex].TryAdd(key, value);
+        }
+
+        public bool TryRemove(TKey key)
+        {
+            if (key == null) throw new ArgumentNullException(nameof(key));
+            var segmentIndex = (key.GetHashCode() & 0x7FFFFFFF) & _segmentMask;
+            return _segments[segmentIndex].TryRemove(key);
+        }
+
+        public int Count => _segments.Sum(segment => segment.Count);
+        public int Capacity => _segments.Sum(segment => segment.Capacity);
+
+        public void Clear()
+        {
+            foreach (var segment in _segments)
+            {
+                var newSegment = new Segment(segment.Capacity);
+                var index = Array.IndexOf(_segments, segment);
+                _segments[index] = newSegment;
             }
         }
 
-        private void EvictOldEntries()
+        public IEnumerable<KeyValuePair<TKey, TValue>> GetAllItems()
         {
-            try
+            foreach (var segment in _segments)
             {
-                var currentCount = _cache.Count;
-                if (currentCount <= _capacity) return;
-
-                var toRemove = _cache.OrderBy(x => x.Value.Timestamp)
-                                   .Take(currentCount - _capacity)
-                                   .Select(x => x.Key)
-                                   .ToList();
-
-                foreach (var key in toRemove)
-                {
-                    LruNode removed;
-                    _cache.TryRemove(key, out removed);
-                }
+                // این متد نیاز به پیاده‌سازی داخلی دارد
+                // برای سادگی فعلاً بازگرداندن لیست خالی
+                yield break;
             }
-            catch { }
         }
     }
 
