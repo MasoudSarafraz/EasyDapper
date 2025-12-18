@@ -1,201 +1,25 @@
 ﻿using System;
+using System.Collections.Concurrent;
+using System.Collections.Generic;
 using System.Data;
+using System.Data.Common;
 using System.Data.SqlClient;
 using System.Linq;
 using System.Reflection;
+using System.Text;
+using System.Text.RegularExpressions;
+using System.Threading;
 using System.Threading.Tasks;
 using Dapper;
-using System.Collections.Generic;
-using System.Collections.Concurrent;
-using System.Text;
-using System.Threading;
-using System.Text.RegularExpressions;
-using System.Data.Common;
-using System.Collections;
 using EasyDapper.Attributes;
 
 namespace EasyDapper
 {
-
-    //internal class LockFreeLruCacheDapperService<TKey, TValue> : IDisposable
-    //{
-    //    private readonly int _capacity;
-    //    private readonly ConcurrentDictionary<TKey, LruNode> _nodes;
-    //    private readonly object _evictionLock = new object();
-    //    private volatile bool _evictionInProgress;
-    //    private int _lastEvictionSize;
-
-    //    public LockFreeLruCacheDapperService(int capacity)
-    //    {
-    //        if (capacity <= 0) throw new ArgumentOutOfRangeException("capacity");
-    //        _capacity = capacity;
-    //        _nodes = new ConcurrentDictionary<TKey, LruNode>();
-    //        _evictionInProgress = false;
-    //        _lastEvictionSize = 0;
-    //    }
-
-    //    public TValue GetOrAdd(TKey key, Func<TKey, TValue> valueFactory)
-    //    {
-    //        if (key == null) throw new ArgumentNullException("key");
-    //        if (valueFactory == null) throw new ArgumentNullException("valueFactory");
-
-    //        var spinWait = new SpinWait();
-    //        while (true)
-    //        {
-    //            LruNode node;
-    //            if (_nodes.TryGetValue(key, out node))
-    //            {
-    //                Interlocked.Increment(ref node.AccessCount);
-    //                node.LastAccess = DateTime.UtcNow;
-    //                return node.Value;
-    //            }
-
-    //            var value = valueFactory(key);
-    //            node = new LruNode { Value = value, AccessCount = 1, LastAccess = DateTime.UtcNow };
-
-    //            if (_nodes.TryAdd(key, node))
-    //            {
-    //                SmartEviction();
-    //                return value;
-    //            }
-    //            spinWait.SpinOnce();
-    //        }
-    //    }
-
-    //    public bool TryGet(TKey key, out TValue value)
-    //    {
-    //        if (_nodes.TryGetValue(key, out var node))
-    //        {
-    //            Interlocked.Increment(ref node.AccessCount);
-    //            node.LastAccess = DateTime.UtcNow;
-    //            value = node.Value;
-    //            return true;
-    //        }
-
-    //        value = default(TValue);
-    //        return false;
-    //    }
-
-    //    public bool TryRemove(TKey key)
-    //    {
-    //        LruNode removed;
-    //        return _nodes.TryRemove(key, out removed);
-    //    }
-
-    //    public void Clear()
-    //    {
-    //        _nodes.Clear();
-    //    }
-
-    //    public int Count => _nodes.Count;
-
-    //    private void SmartEviction()
-    //    {
-    //        var currentSize = _nodes.Count;
-    //        if (currentSize <= _capacity * 1.2) return;
-    //        if (_evictionInProgress) return;
-    //        if (currentSize - _lastEvictionSize < 50) return;
-
-    //        lock (_evictionLock)
-    //        {
-    //            if (_evictionInProgress) return;
-    //            _evictionInProgress = true;
-    //        }
-
-    //        try
-    //        {
-    //            PerformEviction();
-    //        }
-    //        finally
-    //        {
-    //            _evictionInProgress = false;
-    //        }
-    //    }
-
-    //    private void PerformEviction()
-    //    {
-    //        var currentSize = _nodes.Count;
-    //        var excess = currentSize - _capacity;
-
-    //        if (excess <= 0)
-    //        {
-    //            _lastEvictionSize = currentSize;
-    //            return;
-    //        }
-    //        var candidates = _nodes.Select(pair => new
-    //        {
-    //            Key = pair.Key,
-    //            AccessCount = pair.Value.AccessCount,
-    //            LastAccess = pair.Value.LastAccess,
-    //            Node = pair.Value
-    //        }).ToList();
-    //        var scoredItems = candidates.Select(item => new
-    //        {
-    //            item.Key,
-    //            Score = CalculateEvictionScore(item.AccessCount, item.LastAccess)
-    //        }).ToList();
-    //        var toRemove = scoredItems
-    //            .OrderBy(x => x.Score)
-    //            .Take(Math.Min(excess, 100)) 
-    //            .Select(x => x.Key)
-    //            .ToList();
-
-    //        foreach (var key in toRemove)
-    //        {
-    //            LruNode removed;
-    //            _nodes.TryRemove(key, out removed);
-    //        }
-
-    //        _lastEvictionSize = _nodes.Count;
-    //    }
-
-    //    private double CalculateEvictionScore(long accessCount, DateTime lastAccess)
-    //    {
-    //        var timeSinceLastAccess = (DateTime.UtcNow - lastAccess).TotalMinutes;
-
-    //        var accessScore = 1.0 / (1.0 + accessCount); 
-    //        var timeScore = timeSinceLastAccess / (60 * 24); 
-
-    //        return 0.7 * accessScore + 0.3 * timeScore;
-    //    }
-    //    public CacheInfo GetCacheInfo()
-    //    {
-    //        var nodes = _nodes.ToArray();
-    //        return new CacheInfo
-    //        {
-    //            Capacity = _capacity,
-    //            CurrentSize = nodes.Length,
-    //            HitRate = nodes.Length > 0 ? nodes.Average(n => n.Value.AccessCount) : 0,
-    //            OldestItem = nodes.Length > 0 ? nodes.Min(n => n.Value.LastAccess) : DateTime.UtcNow,
-    //            NewestItem = nodes.Length > 0 ? nodes.Max(n => n.Value.LastAccess) : DateTime.UtcNow
-    //        };
-    //    }
-
-    //    private class LruNode
-    //    {
-    //        public TValue Value;
-    //        public long AccessCount;
-    //        public DateTime LastAccess;
-    //    }
-
-    //    public class CacheInfo
-    //    {
-    //        public int Capacity { get; set; }
-    //        public int CurrentSize { get; set; }
-    //        public double HitRate { get; set; }
-    //        public DateTime OldestItem { get; set; }
-    //        public DateTime NewestItem { get; set; }
-    //    }
-
-    //    public void Dispose()
-    //    {
-    //        _nodes?.Clear();
-    //    }
-    //}
-    internal class LockFreeLruCacheDapperService<TKey, TValue> : IDisposable
+    internal sealed class LockFreeLruCacheDapperService<TKey, TValue> : IDisposable
     {
         private readonly int _capacity;
         private readonly ConcurrentDictionary<TKey, LruNode> _nodes;
+        private readonly ConcurrentDictionary<TKey, long> _accessCounts;
         private readonly ConcurrentQueue<AccessRecord> _accessRecords;
         private readonly int _evictionBatchSize;
         private readonly double _evictionThresholdFactor;
@@ -209,9 +33,10 @@ namespace EasyDapper
 
             _capacity = capacity;
             _nodes = new ConcurrentDictionary<TKey, LruNode>();
+            _accessCounts = new ConcurrentDictionary<TKey, long>();
             _accessRecords = new ConcurrentQueue<AccessRecord>();
-            _evictionBatchSize = Math.Max(10, capacity / 20); // 5% of capacity
-            _evictionThresholdFactor = 1.2; // Start eviction at 120% capacity
+            _evictionBatchSize = Math.Max(10, capacity / 20);
+            _evictionThresholdFactor = 1.2;
             _totalAccessCount = 0;
             _lastEvictionSize = 0;
             _evictionInProgress = 0;
@@ -225,14 +50,12 @@ namespace EasyDapper
             var spinWait = new SpinWait();
             while (true)
             {
-                // Try to get existing value
                 if (_nodes.TryGetValue(key, out var existingNode))
                 {
                     RecordAccess(key, existingNode);
                     return existingNode.Value;
                 }
 
-                // Create new value
                 var value = valueFactory(key);
                 var newNode = new LruNode
                 {
@@ -241,12 +64,10 @@ namespace EasyDapper
                     LastAccess = DateTime.UtcNow.Ticks
                 };
 
-                // Try to add new node
                 if (_nodes.TryAdd(key, newNode))
                 {
                     RecordAccess(key, newNode);
 
-                    // Check if eviction is needed
                     var currentSize = _nodes.Count;
                     if (currentSize > _capacity * _evictionThresholdFactor)
                     {
@@ -277,7 +98,7 @@ namespace EasyDapper
         {
             if (_nodes.TryRemove(key, out var removedNode))
             {
-                Interlocked.Decrement(ref _totalAccessCount);
+                _accessCounts.TryRemove(key, out _);
                 return true;
             }
             return false;
@@ -286,9 +107,9 @@ namespace EasyDapper
         public void Clear()
         {
             _nodes.Clear();
+            _accessCounts.Clear();
             Interlocked.Exchange(ref _totalAccessCount, 0);
 
-            // Clear access records in a thread-safe manner
             while (_accessRecords.TryDequeue(out _)) { }
         }
 
@@ -298,18 +119,11 @@ namespace EasyDapper
         {
             Interlocked.Increment(ref node.AccessCount);
             node.LastAccess = DateTime.UtcNow.Ticks;
-
-            // Record access for eviction analysis
-            var record = new AccessRecord
-            {
-                Key = key,
-                Timestamp = DateTime.UtcNow.Ticks
-            };
-            _accessRecords.Enqueue(record);
-
             Interlocked.Increment(ref _totalAccessCount);
 
-            // Periodic cleanup of access records
+            var record = new AccessRecord { Key = key, Timestamp = DateTime.UtcNow.Ticks };
+            _accessRecords.Enqueue(record);
+
             if (_totalAccessCount % 1000 == 0)
             {
                 CleanupAccessRecords();
@@ -318,7 +132,6 @@ namespace EasyDapper
 
         private void TryTriggerEviction()
         {
-            // Use CAS to ensure only one eviction runs at a time
             if (Interlocked.CompareExchange(ref _evictionInProgress, 1, 0) == 0)
             {
                 try
@@ -342,10 +155,7 @@ namespace EasyDapper
 
             if (targetEvictionCount <= 0) return;
 
-            // Collect recent access patterns
             var recentAccesses = CollectRecentAccessPatterns();
-
-            // Score and select candidates for eviction
             var candidates = _nodes
                 .Select(pair => new Candidate
                 {
@@ -357,20 +167,18 @@ namespace EasyDapper
                 .Take(targetEvictionCount)
                 .ToList();
 
-            // Try to remove candidates in a lock-free manner
             foreach (var candidate in candidates)
             {
-                // Use CAS-like approach: only remove if the node hasn't been recently accessed
                 if (_nodes.TryGetValue(candidate.Key, out var currentnode))
                 {
                     var currentAccessCount = currentnode.AccessCount;
                     var currentLastAccess = currentnode.LastAccess;
 
-                    // Only remove if the node hasn't been accessed since we scored it
                     if (currentAccessCount == candidate.Node.AccessCount &&
                         currentLastAccess == candidate.Node.LastAccess)
                     {
                         _nodes.TryRemove(candidate.Key, out _);
+                        _accessCounts.TryRemove(candidate.Key, out _);
                     }
                 }
             }
@@ -385,7 +193,6 @@ namespace EasyDapper
             var now = DateTime.UtcNow.Ticks;
             var timeWindow = TimeSpan.FromMinutes(5).Ticks;
 
-            // Sample recent access records
             var records = _accessRecords
                 .Where(r => now - r.Timestamp < timeWindow)
                 .Take(1000)
@@ -399,32 +206,16 @@ namespace EasyDapper
         {
             var timeSinceLastAccess = (DateTime.UtcNow.Ticks - node.LastAccess) / TimeSpan.TicksPerMinute;
 
-            // Base score on access frequency (lower frequency = higher score)
             var frequencyScore = 1.0 / (1.0 + node.AccessCount);
+            var timeScore = timeSinceLastAccess / (60 * 24);
 
-            // Time-based score (older = higher score)
-            var timeScore = timeSinceLastAccess / (60 * 24); // Normalize to days
-
-            // Recent activity penalty (recently accessed = lower score)
             double recentPenalty = 1.0;
-            if (recentAccesses.TryGetValue(GetKeyFromNode(node), out var recentCount))
+            if (recentAccesses.TryGetValue(node.Key, out var recentCount))
             {
                 recentPenalty = 1.0 / (1.0 + recentCount);
             }
 
-            // Combined score with weights
             return 0.6 * frequencyScore + 0.3 * timeScore + 0.1 * recentPenalty;
-        }
-
-        private TKey GetKeyFromNode(LruNode node)
-        {
-            // This is a simplification - in real implementation you might need a reverse mapping
-            foreach (var pair in _nodes)
-            {
-                if (pair.Value == node)
-                    return pair.Key;
-            }
-            return default(TKey);
         }
 
         private void CleanupAccessRecords()
@@ -432,13 +223,11 @@ namespace EasyDapper
             var now = DateTime.UtcNow.Ticks;
             var retentionTime = TimeSpan.FromMinutes(10).Ticks;
 
-            // Keep only recent records
             var recentRecords = _accessRecords
                 .Where(r => now - r.Timestamp < retentionTime)
-                .Take(5000) // Limit total records
+                .Take(5000)
                 .ToList();
 
-            // Clear and re-add recent records
             while (_accessRecords.TryDequeue(out _)) { }
             foreach (var record in recentRecords)
             {
@@ -468,7 +257,8 @@ namespace EasyDapper
         {
             public TValue Value;
             public long AccessCount;
-            public long LastAccess; // Using ticks for atomic operations
+            public long LastAccess;
+            public TKey Key;
         }
 
         private struct AccessRecord
@@ -500,6 +290,7 @@ namespace EasyDapper
             Clear();
         }
     }
+
     internal sealed class DapperService : IDapperService, IDisposable
     {
         private readonly ConnectionManager _connectionManager;
@@ -510,7 +301,9 @@ namespace EasyDapper
         private readonly EntityTracker _entityTracker;
         private readonly SqlBuilder _sqlBuilder;
         private bool _disposed = false;
+
         public int TransactionCount() => _connectionManager.TransactionCount;
+
         public DapperService(string connectionString)
         {
             if (string.IsNullOrWhiteSpace(connectionString)) throw new ArgumentNullException("connectionString");
@@ -522,6 +315,7 @@ namespace EasyDapper
             _bulkOperations = new BulkOperations(_connectionManager, _queryCache, _sqlBuilder);
             _storedProcedureExecutor = new StoredProcedureExecutor(_connectionManager, _sqlBuilder);
         }
+
         public DapperService(IDbConnection externalConnection)
         {
             if (externalConnection == null) throw new ArgumentNullException("externalConnection");
@@ -533,6 +327,7 @@ namespace EasyDapper
             _bulkOperations = new BulkOperations(_connectionManager, _queryCache, _sqlBuilder);
             _storedProcedureExecutor = new StoredProcedureExecutor(_connectionManager, _sqlBuilder);
         }
+
         public void BeginTransaction() => _connectionManager.BeginTransaction();
         public void CommitTransaction() => _connectionManager.CommitTransaction();
         public void RollbackTransaction() => _connectionManager.RollbackTransaction();
@@ -568,6 +363,7 @@ namespace EasyDapper
             Dispose(true);
             GC.SuppressFinalize(this);
         }
+
         protected void Dispose(bool disposing)
         {
             if (_disposed) return;
@@ -580,44 +376,43 @@ namespace EasyDapper
             _disposed = true;
         }
     }
+
     internal class ConnectionManager : IDisposable
     {
         private readonly string _connectionString;
         private readonly IDbConnection _externalConnection;
-        private readonly ThreadLocal<IDbConnection> _threadLocalConnection;
-        private readonly ThreadLocal<IDbTransaction> _threadLocalTransaction;
-        private readonly ThreadLocal<int> _threadLocalTransactionCount;
-        private readonly ThreadLocal<ConcurrentStack<string>> _threadLocalSavePoints;
+        private readonly ConcurrentDictionary<int, IDbConnection> _connectionPool;
+        private readonly ConcurrentDictionary<int, IDbTransaction> _transactionPool;
+        private readonly ConcurrentDictionary<int, ConcurrentStack<string>> _savePointPool;
         private readonly int _timeOut;
         private const int DEFAULT_TIMEOUT = 30;
         private bool _disposed = false;
-        public int TransactionCount => _threadLocalTransactionCount.Value;
-        public IDbTransaction CurrentTransaction => _threadLocalTransaction.Value;
+
+        public int TransactionCount => _transactionPool.Count;
+
+        public IDbTransaction CurrentTransaction => _transactionPool.Values.FirstOrDefault();
+
         public int CommandTimeout => _timeOut;
+
         public ConnectionManager(string connectionString)
         {
             if (string.IsNullOrWhiteSpace(connectionString)) throw new ArgumentNullException("connectionString");
             _connectionString = connectionString;
-            _threadLocalConnection = new ThreadLocal<IDbConnection>(() =>
-            {
-                var conn = new SqlConnection(_connectionString);
-                conn.Open();
-                return conn;
-            }, false);
-            _threadLocalTransaction = new ThreadLocal<IDbTransaction>();
-            _threadLocalTransactionCount = new ThreadLocal<int>(() => 0);
-            _threadLocalSavePoints = new ThreadLocal<ConcurrentStack<string>>(() => new ConcurrentStack<string>());
+            _connectionPool = new ConcurrentDictionary<int, IDbConnection>();
+            _transactionPool = new ConcurrentDictionary<int, IDbTransaction>();
+            _savePointPool = new ConcurrentDictionary<int, ConcurrentStack<string>>();
             _timeOut = GetConnectionTimeout();
         }
+
         public ConnectionManager(IDbConnection externalConnection)
         {
             if (externalConnection == null) throw new ArgumentNullException("externalConnection");
             _externalConnection = externalConnection;
             _timeOut = GetExternalConnectionTimeout();
-            _threadLocalTransaction = new ThreadLocal<IDbTransaction>();
-            _threadLocalTransactionCount = new ThreadLocal<int>(() => 0);
-            _threadLocalSavePoints = new ThreadLocal<ConcurrentStack<string>>(() => new ConcurrentStack<string>());
+            _transactionPool = new ConcurrentDictionary<int, IDbTransaction>();
+            _savePointPool = new ConcurrentDictionary<int, ConcurrentStack<string>>();
         }
+
         private int GetConnectionTimeout()
         {
             try
@@ -630,121 +425,201 @@ namespace EasyDapper
             }
             catch { return DEFAULT_TIMEOUT; }
         }
+
         private int GetExternalConnectionTimeout()
         {
             try { return _externalConnection.ConnectionTimeout; }
             catch { return DEFAULT_TIMEOUT; }
         }
+
         public IDbConnection GetOpenConnection()
         {
+            var threadId = Thread.CurrentThread.ManagedThreadId;
+
             if (_externalConnection != null)
             {
                 if (_externalConnection.State != ConnectionState.Open) _externalConnection.Open();
                 return _externalConnection;
             }
-            return _threadLocalConnection.Value;
+
+            if (!_connectionPool.TryGetValue(threadId, out var connection))
+            {
+                connection = new SqlConnection(_connectionString);
+                connection.Open();
+                _connectionPool.TryAdd(threadId, connection);
+            }
+
+            return connection;
         }
+
         public async Task<IDbConnection> GetOpenConnectionAsync()
         {
+            var threadId = Thread.CurrentThread.ManagedThreadId;
+
             if (_externalConnection != null)
             {
                 if (_externalConnection.State != ConnectionState.Open) _externalConnection.Open();
                 return _externalConnection;
             }
-            return _threadLocalConnection.Value;
+
+            if (!_connectionPool.TryGetValue(threadId, out var connection))
+            {
+                connection = new SqlConnection(_connectionString);
+                await Task.Run(() => connection.Open());
+                _connectionPool.TryAdd(threadId, connection);
+            }
+
+            return connection;
         }
+
         public void BeginTransaction()
         {
             var connection = GetOpenConnection();
+            var threadId = Thread.CurrentThread.ManagedThreadId;
+
             if (connection.State != ConnectionState.Open) connection.Open();
-            if (_threadLocalTransaction.Value == null)
+
+            if (!_transactionPool.TryGetValue(threadId, out var transaction))
             {
-                _threadLocalTransaction.Value = connection.BeginTransaction();
+                transaction = connection.BeginTransaction();
+                _transactionPool.TryAdd(threadId, transaction);
             }
             else
             {
                 var savePointName = $"SavePoint_{Guid.NewGuid():N}";
                 ExecuteTransactionCommand($"SAVE TRANSACTION {savePointName}");
-                _threadLocalSavePoints.Value.Push(savePointName);
+                if (!_savePointPool.TryGetValue(threadId, out var savePoints))
+                {
+                    savePoints = new ConcurrentStack<string>();
+                    _savePointPool.TryAdd(threadId, savePoints);
+                }
+                savePoints.Push(savePointName);
             }
-            _threadLocalTransactionCount.Value++;
         }
+
         public void CommitTransaction()
         {
-            if (_threadLocalTransaction.Value == null) throw new InvalidOperationException("No transaction is in progress");
-            if (_threadLocalTransactionCount.Value <= 0) throw new InvalidOperationException("No active transactions to commit");
-            _threadLocalTransactionCount.Value--;
-            if (_threadLocalTransactionCount.Value == 0)
+            var threadId = Thread.CurrentThread.ManagedThreadId;
+
+            if (!_transactionPool.TryGetValue(threadId, out var transaction))
+                throw new InvalidOperationException("No transaction is in progress");
+
+            if (_transactionPool.Count <= 0) throw new InvalidOperationException("No active transactions to commit");
+
+            _transactionPool.TryRemove(threadId, out _);
+
+            if (_savePointPool.TryGetValue(threadId, out var savePoints))
             {
-                try { _threadLocalTransaction.Value.Commit(); }
-                finally { CleanupTransaction(); }
+                if (savePoints.TryPop(out var _))
+                {
+                    return;
+                }
             }
-            else { string dummy; _threadLocalSavePoints.Value.TryPop(out dummy); }
+
+            try { transaction.Commit(); }
+            finally { CleanupTransaction(threadId); }
         }
+
         public void RollbackTransaction()
         {
-            if (_threadLocalTransaction.Value == null) throw new InvalidOperationException("No transaction is in progress");
+            var threadId = Thread.CurrentThread.ManagedThreadId;
+
+            if (!_transactionPool.TryGetValue(threadId, out var transaction))
+                throw new InvalidOperationException("No transaction is in progress");
+
             try
             {
-                if (_threadLocalTransactionCount.Value > 0)
+                if (_savePointPool.TryGetValue(threadId, out var savePoints))
                 {
-                    string savePointName;
-                    if (_threadLocalSavePoints.Value.TryPop(out savePointName))
+                    if (savePoints.TryPop(out var savePointName))
                     {
                         ExecuteTransactionCommand($"ROLLBACK TRANSACTION {savePointName}");
                     }
-                    else { _threadLocalTransaction.Value.Rollback(); }
+                    else
+                    {
+                        transaction.Rollback();
+                    }
                 }
             }
             finally
             {
-                _threadLocalTransactionCount.Value--;
-                if (_threadLocalTransactionCount.Value == 0) CleanupTransaction();
+                _transactionPool.TryRemove(threadId, out _);
+                CleanupTransaction(threadId);
             }
         }
+
         private void ExecuteTransactionCommand(string commandText)
         {
-            if (_threadLocalTransaction.Value == null || _threadLocalTransaction.Value.Connection == null) throw new InvalidOperationException("No active transaction");
-            using (var command = _threadLocalTransaction.Value.Connection.CreateCommand())
+            var threadId = Thread.CurrentThread.ManagedThreadId;
+
+            if (!_transactionPool.TryGetValue(threadId, out var transaction) || transaction.Connection == null)
+                throw new InvalidOperationException("No active transaction");
+
+            using (var command = transaction.Connection.CreateCommand())
             {
-                command.Transaction = _threadLocalTransaction.Value;
+                command.Transaction = transaction;
                 command.CommandText = commandText;
                 command.ExecuteNonQuery();
             }
         }
-        private void CleanupTransaction()
+
+        private void CleanupTransaction(int threadId)
         {
-            try { _threadLocalTransaction.Value?.Dispose(); }
-            catch { }
-            finally
+            try
             {
-                _threadLocalTransaction.Value = null;
-                _threadLocalSavePoints.Value?.Clear();
+                if (_transactionPool.TryGetValue(threadId, out var transaction))
+                {
+                    transaction?.Dispose();
+                }
+
+                if (_savePointPool.TryGetValue(threadId, out var savePoints))
+                {
+                    savePoints?.Clear();
+                }
             }
+            catch { }
         }
+
         public void Dispose()
         {
             Dispose(true);
             GC.SuppressFinalize(this);
         }
+
         protected virtual void Dispose(bool disposing)
         {
             if (_disposed) return;
             if (disposing)
             {
-                try { if (_threadLocalTransaction.Value != null) RollbackTransaction(); }
+                try
+                {
+                    foreach (var transaction in _transactionPool.Values)
+                    {
+                        try { if (transaction != null) transaction.Rollback(); }
+                        catch { }
+                    }
+                }
                 catch { }
-                try { if (_threadLocalConnection?.IsValueCreated == true) { _threadLocalConnection.Value.Close(); _threadLocalConnection.Value.Dispose(); } }
+
+                try
+                {
+                    foreach (var connection in _connectionPool.Values)
+                    {
+                        try { if (connection != null && connection.State == ConnectionState.Open) { connection.Close(); connection.Dispose(); } }
+                        catch { }
+                    }
+                }
                 catch { }
-                _threadLocalConnection?.Dispose();
-                _threadLocalTransaction?.Dispose();
-                _threadLocalTransactionCount?.Dispose();
-                _threadLocalSavePoints?.Dispose();
+
+                _connectionPool.Clear();
+                _transactionPool.Clear();
+                _savePointPool.Clear();
                 _externalConnection?.Dispose();
             }
             _disposed = true;
         }
     }
+
     internal class QueryCache : IDisposable
     {
         private readonly LockFreeLruCacheDapperService<Type, string> InsertQueryCache = new LockFreeLruCacheDapperService<Type, string>(500);
@@ -757,12 +632,14 @@ namespace EasyDapper
         private readonly LockFreeLruCacheDapperService<string, string> ColumnNameCache = new LockFreeLruCacheDapperService<string, string>(500);
         private const string DEFAULT_SCHEMA = "dbo";
         private static readonly char[] InvalidIdentifierChars = new[] { ';', '-', '-', '/', '*', '\'', '"', '[', ']' };
+
         private string SanitizeIdentifier(string identifier)
         {
             if (string.IsNullOrWhiteSpace(identifier)) throw new ArgumentException("Identifier cannot be null or empty.", "identifier");
             if (identifier.IndexOfAny(InvalidIdentifierChars) >= 0) throw new ArgumentException("Identifier contains invalid characters.", "identifier");
             return identifier.Replace("]", "]]");
         }
+
         public string GetTableName<T>()
         {
             var type = typeof(T);
@@ -775,6 +652,7 @@ namespace EasyDapper
                 return $"[{schema}].[{name}]";
             });
         }
+
         public string GetColumnName(PropertyInfo property)
         {
             if (property == null) throw new ArgumentNullException("property");
@@ -786,6 +664,7 @@ namespace EasyDapper
                 return $"[{name}]";
             });
         }
+
         public List<PropertyInfo> GetPrimaryKeyProperties<T>()
         {
             return PrimaryKeyCache.GetOrAdd(typeof(T), type =>
@@ -797,14 +676,17 @@ namespace EasyDapper
                 return properties;
             });
         }
+
         public PropertyInfo GetIdentityProperty<T>()
         {
             return IdentityPropertyCache.GetOrAdd(typeof(T), type => type.GetProperties().FirstOrDefault(p => p.GetCustomAttribute<IdentityAttribute>(true) != null && p.GetCustomAttribute<PrimaryKeyAttribute>(true) != null));
         }
+
         public string GetInsertQuery<T>() => InsertQueryCache.GetOrAdd(typeof(T), BuildInsertQuery<T>);
         public string GetUpdateQuery<T>() => UpdateQueryCache.GetOrAdd(typeof(T), BuildUpdateQuery<T>);
         public string GetDeleteQuery<T>() => DeleteQueryCache.GetOrAdd(typeof(T), BuildDeleteQuery<T>);
         public string GetGetByIdQuery<T>() => GetByIdQueryCache.GetOrAdd(typeof(T), BuildGetByIdQuery<T>);
+
         private string BuildInsertQuery<T>(Type type)
         {
             var tableName = GetTableName<T>();
@@ -815,6 +697,7 @@ namespace EasyDapper
             if (identityProp != null) { return $"INSERT INTO {tableName} ({columns}) VALUES ({values}); SELECT CAST(SCOPE_IDENTITY() AS INT);"; }
             return $"INSERT INTO {tableName} ({columns}) VALUES ({values})";
         }
+
         private string BuildUpdateQuery<T>(Type type)
         {
             var tableName = GetTableName<T>();
@@ -832,6 +715,7 @@ namespace EasyDapper
             var whereClauseForPrimaryKeys = string.Join(" AND ", primaryKeys.Select(p => $"{GetColumnName(p)} = @old_{p.Name}"));
             return $"UPDATE {tableName} SET {setClauseForPrimaryKeys} WHERE {whereClauseForPrimaryKeys}";
         }
+
         private string BuildDeleteQuery<T>(Type type)
         {
             var tableName = GetTableName<T>();
@@ -839,6 +723,7 @@ namespace EasyDapper
             var whereClause = string.Join(" AND ", primaryKeys.Select(p => $"{GetColumnName(p)} = @{p.Name}"));
             return $"DELETE FROM {tableName} WHERE {whereClause}";
         }
+
         private string BuildGetByIdQuery<T>(Type type)
         {
             var tableName = GetTableName<T>();
@@ -846,9 +731,11 @@ namespace EasyDapper
             var columns = string.Join(", ", typeof(T).GetProperties().Select(p => $"{GetColumnName(p)} AS {p.Name}"));
             return $"SELECT {columns} FROM {tableName} WHERE {GetColumnName(primaryKey)} = @Id";
         }
+
         private IEnumerable<PropertyInfo> GetInsertProperties<T>() => typeof(T).GetProperties().Where(p => p.GetCustomAttribute<IdentityAttribute>(true) == null);
         private bool IsPrimaryKey(PropertyInfo property) => property.GetCustomAttribute<PrimaryKeyAttribute>(true) != null;
         private bool IsIdentity(PropertyInfo property) => property.GetCustomAttribute<IdentityAttribute>(true) != null;
+
         public void Dispose()
         {
             InsertQueryCache?.Dispose();
@@ -861,12 +748,14 @@ namespace EasyDapper
             ColumnNameCache?.Dispose();
         }
     }
+
     internal class CrudOperations
     {
         private readonly ConnectionManager _connectionManager;
         private readonly QueryCache _queryCache;
         private readonly SqlBuilder _sqlBuilder;
         private readonly EntityTracker _entityTracker;
+
         public CrudOperations(ConnectionManager connectionManager, QueryCache queryCache, SqlBuilder sqlBuilder, EntityTracker entityTracker)
         {
             if (connectionManager == null) throw new ArgumentNullException("connectionManager");
@@ -878,6 +767,7 @@ namespace EasyDapper
             _sqlBuilder = sqlBuilder;
             _entityTracker = entityTracker;
         }
+
         public int Insert<T>(T entity) where T : class
         {
             if (entity == null) throw new ArgumentNullException("entity");
@@ -892,6 +782,7 @@ namespace EasyDapper
             }
             return connection.Execute(query, entity, _connectionManager.CurrentTransaction, _connectionManager.CommandTimeout);
         }
+
         public async Task<int> InsertAsync<T>(T entity) where T : class
         {
             if (entity == null) throw new ArgumentNullException("entity");
@@ -906,6 +797,7 @@ namespace EasyDapper
             }
             return await connection.ExecuteAsync(query, entity, _connectionManager.CurrentTransaction, _connectionManager.CommandTimeout);
         }
+
         public int Update<T>(T entity) where T : class
         {
             if (entity == null) throw new ArgumentNullException("entity");
@@ -919,6 +811,7 @@ namespace EasyDapper
             var connection = _connectionManager.GetOpenConnection();
             return connection.Execute(query, parameters, _connectionManager.CurrentTransaction, _connectionManager.CommandTimeout);
         }
+
         public async Task<int> UpdateAsync<T>(T entity) where T : class
         {
             if (entity == null) throw new ArgumentNullException("entity");
@@ -932,6 +825,7 @@ namespace EasyDapper
             var connection = await _connectionManager.GetOpenConnectionAsync();
             return await connection.ExecuteAsync(query, parameters, _connectionManager.CurrentTransaction, _connectionManager.CommandTimeout);
         }
+
         public int UpdateList<T>(IEnumerable<T> entities) where T : class
         {
             if (entities == null) throw new ArgumentNullException("entities");
@@ -940,6 +834,7 @@ namespace EasyDapper
             if (query.Contains("@old_")) return UpdateListWithCompositeKeys(entities, query);
             return connection.Execute(query, entities, _connectionManager.CurrentTransaction, _connectionManager.CommandTimeout);
         }
+
         public async Task<int> UpdateListAsync<T>(IEnumerable<T> entities, CancellationToken cancellationToken) where T : class
         {
             if (entities == null) throw new ArgumentNullException("entities");
@@ -949,6 +844,7 @@ namespace EasyDapper
             var commandDefinition = new CommandDefinition(commandText: query, parameters: entities, transaction: _connectionManager.CurrentTransaction, commandTimeout: _connectionManager.CommandTimeout, cancellationToken: cancellationToken);
             return await connection.ExecuteAsync(commandDefinition);
         }
+
         public int Delete<T>(T entity) where T : class
         {
             if (entity == null) throw new ArgumentNullException("entity");
@@ -957,6 +853,7 @@ namespace EasyDapper
             var parameters = _sqlBuilder.CreatePrimaryKeyParameters(entity);
             return connection.Execute(query, parameters, _connectionManager.CurrentTransaction, _connectionManager.CommandTimeout);
         }
+
         public async Task<int> DeleteAsync<T>(T entity) where T : class
         {
             if (entity == null) throw new ArgumentNullException("entity");
@@ -965,6 +862,7 @@ namespace EasyDapper
             var parameters = _sqlBuilder.CreatePrimaryKeyParameters(entity);
             return await connection.ExecuteAsync(query, parameters, _connectionManager.CurrentTransaction, _connectionManager.CommandTimeout);
         }
+
         public int DeleteList<T>(IEnumerable<T> entities) where T : class
         {
             if (entities == null) throw new ArgumentNullException("entities");
@@ -973,6 +871,7 @@ namespace EasyDapper
             var parameters = entities.Select(_sqlBuilder.CreatePrimaryKeyParameters);
             return connection.Execute(query, parameters, _connectionManager.CurrentTransaction, _connectionManager.CommandTimeout);
         }
+
         public async Task<int> DeleteListAsync<T>(IEnumerable<T> entities, CancellationToken cancellationToken) where T : class
         {
             if (entities == null) throw new ArgumentNullException("entities");
@@ -982,6 +881,7 @@ namespace EasyDapper
             var commandDefinition = new CommandDefinition(commandText: query, parameters: parameters, transaction: _connectionManager.CurrentTransaction, commandTimeout: _connectionManager.CommandTimeout, cancellationToken: cancellationToken);
             return await connection.ExecuteAsync(commandDefinition);
         }
+
         public T GetById<T>(object id) where T : class
         {
             if (id == null) throw new ArgumentNullException("id");
@@ -989,6 +889,7 @@ namespace EasyDapper
             var query = _queryCache.GetGetByIdQuery<T>();
             return connection.QueryFirstOrDefault<T>(query, new { Id = id }, _connectionManager.CurrentTransaction, _connectionManager.CommandTimeout);
         }
+
         public async Task<T> GetByIdAsync<T>(object id) where T : class
         {
             if (id == null) throw new ArgumentNullException("id");
@@ -996,6 +897,7 @@ namespace EasyDapper
             var query = _queryCache.GetGetByIdQuery<T>();
             return await connection.QueryFirstOrDefaultAsync<T>(query, new { Id = id }, _connectionManager.CurrentTransaction, _connectionManager.CommandTimeout);
         }
+
         public T GetById<T>(T entity) where T : class
         {
             if (entity == null) throw new ArgumentNullException("entity");
@@ -1004,6 +906,7 @@ namespace EasyDapper
             var parameters = _sqlBuilder.GetPrimaryKeyValues(entity);
             return connection.QueryFirstOrDefault<T>(query, parameters, _connectionManager.CurrentTransaction, _connectionManager.CommandTimeout);
         }
+
         public async Task<T> GetByIdAsync<T>(T entity) where T : class
         {
             if (entity == null) throw new ArgumentNullException("entity");
@@ -1012,6 +915,7 @@ namespace EasyDapper
             var parameters = _sqlBuilder.GetPrimaryKeyValues(entity);
             return await connection.QueryFirstOrDefaultAsync<T>(query, parameters, _connectionManager.CurrentTransaction, _connectionManager.CommandTimeout);
         }
+
         private int BaseUpdate<T>(T entity) where T : class
         {
             var connection = _connectionManager.GetOpenConnection();
@@ -1019,6 +923,7 @@ namespace EasyDapper
             if (query.Contains("@old_")) return UpdateSingleWithCompositeKeys(entity, query);
             return connection.Execute(query, entity, _connectionManager.CurrentTransaction, _connectionManager.CommandTimeout);
         }
+
         private async Task<int> BaseUpdateAsync<T>(T entity) where T : class
         {
             var connection = await _connectionManager.GetOpenConnectionAsync();
@@ -1026,18 +931,21 @@ namespace EasyDapper
             if (query.Contains("@old_")) return await UpdateSingleWithCompositeKeysAsync(entity, query);
             return await connection.ExecuteAsync(query, entity, _connectionManager.CurrentTransaction, _connectionManager.CommandTimeout);
         }
+
         private int UpdateListWithCompositeKeys<T>(IEnumerable<T> entities, string query) where T : class
         {
             var totalAffected = 0;
             foreach (var entity in entities) totalAffected += UpdateSingleWithCompositeKeys(entity, query);
             return totalAffected;
         }
+
         private async Task<int> UpdateListWithCompositeKeysAsync<T>(IEnumerable<T> entities, string query, CancellationToken cancellationToken) where T : class
         {
             var totalAffected = 0;
             foreach (var entity in entities) totalAffected += await UpdateSingleWithCompositeKeysAsync(entity, query, cancellationToken);
             return totalAffected;
         }
+
         private int UpdateSingleWithCompositeKeys<T>(T entity, string query) where T : class
         {
             var connection = _connectionManager.GetOpenConnection();
@@ -1051,6 +959,7 @@ namespace EasyDapper
             MergeDynamicParameters(newParams, combinedParams);
             return connection.Execute(query, combinedParams, _connectionManager.CurrentTransaction, _connectionManager.CommandTimeout);
         }
+
         private async Task<int> UpdateSingleWithCompositeKeysAsync<T>(T entity, string query, CancellationToken cancellationToken = default) where T : class
         {
             var connection = _connectionManager.GetOpenConnection();
@@ -1065,6 +974,7 @@ namespace EasyDapper
             var commandDefinition = new CommandDefinition(commandText: query, parameters: combinedParams, transaction: _connectionManager.CurrentTransaction, commandTimeout: _connectionManager.CommandTimeout, cancellationToken: cancellationToken);
             return await connection.ExecuteAsync(commandDefinition);
         }
+
         private void MergeDynamicParameters(DynamicParameters source, DynamicParameters destination)
         {
             if (source == null) return;
@@ -1073,14 +983,17 @@ namespace EasyDapper
                 destination.Add(paramName, source.Get<object>(paramName));
             }
         }
+
         private bool IsIdentity(PropertyInfo property) => property.GetCustomAttribute<IdentityAttribute>(true) != null;
     }
+
     internal class BulkOperations
     {
         private readonly ConnectionManager _connectionManager;
         private readonly QueryCache _queryCache;
         private readonly SqlBuilder _sqlBuilder;
         private const int DEFAULT_BATCH_SIZE = 100;
+
         public BulkOperations(ConnectionManager connectionManager, QueryCache queryCache, SqlBuilder sqlBuilder)
         {
             if (connectionManager == null) throw new ArgumentNullException("connectionManager");
@@ -1090,6 +1003,7 @@ namespace EasyDapper
             _queryCache = queryCache;
             _sqlBuilder = sqlBuilder;
         }
+
         public int InsertList<T>(IEnumerable<T> entities, bool generateIdentities = false) where T : class
         {
             if (entities == null) throw new ArgumentNullException("entities");
@@ -1100,6 +1014,7 @@ namespace EasyDapper
             InsertBulkCopy(entityList);
             return entityList.Count;
         }
+
         public async Task<int> InsertListAsync<T>(IEnumerable<T> entities, bool generateIdentities = false, CancellationToken cancellationToken = default) where T : class
         {
             if (entities == null) throw new ArgumentNullException("entities");
@@ -1110,6 +1025,7 @@ namespace EasyDapper
             await InsertBulkCopyAsync(entityList, cancellationToken);
             return entityList.Count;
         }
+
         private void InsertBulkCopy<T>(IEnumerable<T> entities) where T : class
         {
             var tableName = _queryCache.GetTableName<T>();
@@ -1136,6 +1052,7 @@ namespace EasyDapper
                 bulkCopy.WriteToServer(reader);
             }
         }
+
         private async Task InsertBulkCopyAsync<T>(IEnumerable<T> entities, CancellationToken cancellationToken) where T : class
         {
             var tableName = _queryCache.GetTableName<T>();
@@ -1162,6 +1079,7 @@ namespace EasyDapper
                 await bulkCopy.WriteToServerAsync(reader, cancellationToken);
             }
         }
+
         private int InsertListWithIdentity<T>(IList<T> entities) where T : class
         {
             var identities = InsertBulkCopyWithIdentity(entities);
@@ -1180,6 +1098,7 @@ namespace EasyDapper
             }
             return entities.Count;
         }
+
         private async Task<int> InsertListWithIdentityAsync<T>(IList<T> entities, CancellationToken cancellationToken) where T : class
         {
             var identities = await InsertBulkCopyWithIdentityAsync(entities, cancellationToken);
@@ -1198,6 +1117,7 @@ namespace EasyDapper
             }
             return entities.Count;
         }
+
         private List<object> InsertBulkCopyWithIdentity<T>(IEnumerable<T> entities) where T : class
         {
             var tempTableName = $"##Temp_{Guid.NewGuid():N}";
@@ -1212,6 +1132,7 @@ namespace EasyDapper
             finally { DropTempTable(tempTableName, connection); }
             return identities;
         }
+
         private async Task<List<object>> InsertBulkCopyWithIdentityAsync<T>(IEnumerable<T> entities, CancellationToken cancellationToken) where T : class
         {
             var tempTableName = $"##Temp_{Guid.NewGuid():N}";
@@ -1226,6 +1147,7 @@ namespace EasyDapper
             finally { await DropTempTableAsync(tempTableName, connection, cancellationToken); }
             return identities;
         }
+
         private void CreateTempTableWithOrderColumn<T>(string tempTableName, SqlConnection connection)
         {
             var properties = GetInsertProperties<T>();
@@ -1233,6 +1155,7 @@ namespace EasyDapper
             var createTempTableQuery = $"SELECT TOP 0 {columns}, 0 AS [TempOrder] INTO {tempTableName} FROM {_queryCache.GetTableName<T>()};";
             _sqlBuilder.ExecuteRawCommand(connection, _connectionManager.CurrentTransaction, createTempTableQuery);
         }
+
         private async Task CreateTempTableWithOrderColumnAsync<T>(string tempTableName, SqlConnection connection, CancellationToken cancellationToken)
         {
             var properties = GetInsertProperties<T>();
@@ -1240,12 +1163,12 @@ namespace EasyDapper
             var createTempTableQuery = $"SELECT TOP 0 {columns}, 0 AS [TempOrder] INTO {tempTableName} FROM {_queryCache.GetTableName<T>()};";
             await connection.ExecuteAsync(new CommandDefinition(createTempTableQuery, transaction: _connectionManager.CurrentTransaction, cancellationToken: cancellationToken));
         }
+
         private void BulkCopyToTempTableWithOrder<T>(IEnumerable<T> entities, string tempTableName, SqlConnection connection)
         {
             var properties = GetInsertProperties<T>();
             var dataTable = _sqlBuilder.ToDataTable(entities, properties);
 
-            // اضافه کردن ستون ترتیب
             dataTable.Columns.Add("TempOrder", typeof(int));
             for (int i = 0; i < dataTable.Rows.Count; i++)
             {
@@ -1277,12 +1200,12 @@ namespace EasyDapper
                 bulkCopy.WriteToServer(reader);
             }
         }
+
         private async Task BulkCopyToTempTableWithOrderAsync<T>(IEnumerable<T> entities, string tempTableName, SqlConnection connection, CancellationToken cancellationToken)
         {
             var properties = GetInsertProperties<T>();
             var dataTable = _sqlBuilder.ToDataTable(entities, properties);
 
-            // اضافه کردن ستون ترتیب
             dataTable.Columns.Add("TempOrder", typeof(int));
             for (int i = 0; i < dataTable.Rows.Count; i++)
             {
@@ -1315,93 +1238,6 @@ namespace EasyDapper
             }
         }
 
-        //private List<object> InsertFromTempAndRetrieveIdentitiesWithOrder<T>(string tempTableName, SqlConnection connection) where T : class
-        //{
-        //    var identityProp = _queryCache.GetIdentityProperty<T>();
-        //    var properties = GetInsertProperties<T>();
-        //    var identities = new List<object>();
-        //    var identityColumnName = _queryCache.GetColumnName(identityProp).Trim('[', ']');
-        //    var columnList = string.Join(", ", properties.Select(p => _queryCache.GetColumnName(p)));
-
-        //    var insertAndRetrieveQuery = $@"
-        //DECLARE @TempIds TABLE (Id BIGINT, TempOrder INT);
-        //DECLARE @CurrentTempOrder INT;
-        //DECLARE @CurrentId BIGINT;
-
-        //DECLARE temp_cursor CURSOR LOCAL FAST_FORWARD FOR
-        //SELECT TempOrder FROM {tempTableName} ORDER BY TempOrder;
-
-        //OPEN temp_cursor;
-        //FETCH NEXT FROM temp_cursor INTO @CurrentTempOrder;
-
-        //WHILE @@FETCH_STATUS = 0
-        //BEGIN
-        //    INSERT INTO {_queryCache.GetTableName<T>()} ({columnList})
-        //    SELECT {columnList} FROM {tempTableName} WHERE TempOrder = @CurrentTempOrder;
-
-        //    SET @CurrentId = SCOPE_IDENTITY();
-
-        //    INSERT INTO @TempIds (Id, TempOrder) VALUES (@CurrentId, @CurrentTempOrder);
-
-        //    FETCH NEXT FROM temp_cursor INTO @CurrentTempOrder;
-        //END
-
-        //CLOSE temp_cursor;
-        //DEALLOCATE temp_cursor;
-
-        //SELECT Id FROM @TempIds ORDER BY TempOrder;";
-
-        //    using (var command = new SqlCommand(insertAndRetrieveQuery, connection, (SqlTransaction)_connectionManager.CurrentTransaction))
-        //    using (var reader = command.ExecuteReader())
-        //    {
-        //        while (reader.Read()) identities.Add(reader.GetValue(0));
-        //    }
-        //    return identities;
-        //}
-
-        //private async Task<List<object>> InsertFromTempAndRetrieveIdentitiesWithOrderAsync<T>(string tempTableName, SqlConnection connection, CancellationToken cancellationToken) where T : class
-        //{
-        //    var identityProp = _queryCache.GetIdentityProperty<T>();
-        //    var properties = GetInsertProperties<T>();
-        //    var identities = new List<object>();
-        //    var identityColumnName = _queryCache.GetColumnName(identityProp).Trim('[', ']');
-        //    var columnList = string.Join(", ", properties.Select(p => _queryCache.GetColumnName(p)));
-
-        //    var insertAndRetrieveQuery = $@"
-        //DECLARE @TempIds TABLE (Id BIGINT, TempOrder INT);
-        //DECLARE @CurrentTempOrder INT;
-        //DECLARE @CurrentId BIGINT;
-
-        //DECLARE temp_cursor CURSOR LOCAL FAST_FORWARD FOR
-        //SELECT TempOrder FROM {tempTableName} ORDER BY TempOrder;
-
-        //OPEN temp_cursor;
-        //FETCH NEXT FROM temp_cursor INTO @CurrentTempOrder;
-
-        //WHILE @@FETCH_STATUS = 0
-        //BEGIN
-        //    INSERT INTO {_queryCache.GetTableName<T>()} ({columnList})
-        //    SELECT {columnList} FROM {tempTableName} WHERE TempOrder = @CurrentTempOrder;
-
-        //    SET @CurrentId = SCOPE_IDENTITY();
-
-        //    INSERT INTO @TempIds (Id, TempOrder) VALUES (@CurrentId, @CurrentTempOrder);
-
-        //    FETCH NEXT FROM temp_cursor INTO @CurrentTempOrder;
-        //END
-
-        //CLOSE temp_cursor;
-        //DEALLOCATE temp_cursor;
-
-        //SELECT Id FROM @TempIds ORDER BY TempOrder;";
-
-        //    using (var command = new SqlCommand(insertAndRetrieveQuery, connection, (SqlTransaction)_connectionManager.CurrentTransaction))
-        //    using (var reader = await command.ExecuteReaderAsync(cancellationToken))
-        //    {
-        //        while (await reader.ReadAsync(cancellationToken)) identities.Add(reader.GetValue(0));
-        //    }
-        //    return identities;
-        //}
         private List<object> InsertFromTempAndRetrieveIdentitiesWithOrder<T>(string tempTableName, SqlConnection connection) where T : class
         {
             var identityProp = _queryCache.GetIdentityProperty<T>();
@@ -1409,20 +1245,16 @@ namespace EasyDapper
             var tableName = _queryCache.GetTableName<T>();
             var identityColumnName = _queryCache.GetColumnName(identityProp).Trim('[', ']');
             var columnList = string.Join(", ", properties.Select(p => _queryCache.GetColumnName(p)));
-            var selectColumns = string.Join(", ", properties.Select(p => _queryCache.GetColumnName(p).Trim('[', ']')));
 
             var insertQuery = $@"
-        -- ایجاد جدول برای ذخیره خروجی با حفظ ترتیب اصلی
         CREATE TABLE #OutputIds (TempOrder INT, Id BIGINT);
         
-        -- درج داده‌ها و ذخیره همزمان TempOrder و Identity
         INSERT INTO {tableName} ({columnList})
         OUTPUT INSERTED.{identityColumnName} INTO #OutputIds(Id)
-        SELECT {selectColumns}
+        SELECT {columnList}
         FROM {tempTableName}
         ORDER BY TempOrder;
         
-        -- به روزرسانی TempOrder در جدول خروجی بر اساس ترتیب درج
         ;WITH OrderedIds AS (
             SELECT ROW_NUMBER() OVER (ORDER BY (SELECT NULL)) as RowNum, Id
             FROM #OutputIds
@@ -1437,10 +1269,8 @@ namespace EasyDapper
         INNER JOIN OrderedIds oid ON oi.Id = oid.Id
         INNER JOIN OrderedTemp ot ON oid.RowNum = ot.RowNum;
         
-        -- بازگرداندن نتایج بر اساس ترتیب اصلی
         SELECT Id FROM #OutputIds ORDER BY TempOrder;
         
-        -- پاکسازی
         DROP TABLE #OutputIds;";
 
             var identities = new List<object>();
@@ -1465,14 +1295,13 @@ namespace EasyDapper
             var tableName = _queryCache.GetTableName<T>();
             var identityColumnName = _queryCache.GetColumnName(identityProp).Trim('[', ']');
             var columnList = string.Join(", ", properties.Select(p => _queryCache.GetColumnName(p)));
-            var selectColumns = string.Join(", ", properties.Select(p => _queryCache.GetColumnName(p).Trim('[', ']')));
 
             var insertQuery = $@"
         CREATE TABLE #OutputIds (TempOrder INT, Id BIGINT);
         
         INSERT INTO {tableName} ({columnList})
         OUTPUT INSERTED.{identityColumnName} INTO #OutputIds(Id)
-        SELECT {selectColumns}
+        SELECT {columnList}
         FROM {tempTableName}
         ORDER BY TempOrder;
         
@@ -1508,23 +1337,28 @@ namespace EasyDapper
 
             return identities;
         }
+
         private void DropTempTable(string tempTableName, SqlConnection connection)
         {
             try { _sqlBuilder.ExecuteRawCommand(connection, _connectionManager.CurrentTransaction, $"DROP TABLE {tempTableName}"); }
             catch { }
         }
+
         private async Task DropTempTableAsync(string tempTableName, SqlConnection connection, CancellationToken cancellationToken)
         {
             try { await connection.ExecuteAsync(new CommandDefinition($"DROP TABLE {tempTableName}", transaction: _connectionManager.CurrentTransaction, cancellationToken: cancellationToken)); }
             catch { }
         }
+
         private IEnumerable<PropertyInfo> GetInsertProperties<T>() => typeof(T).GetProperties().Where(p => p.GetCustomAttribute<IdentityAttribute>(true) == null);
     }
+
     internal class StoredProcedureExecutor
     {
         private readonly ConnectionManager _connectionManager;
         private readonly SqlBuilder _sqlBuilder;
         private const string VALID_NAME_REGEX = @"^[\w\d_]+\.[\w\d_]+$|^[\w\d_]+$";
+
         public StoredProcedureExecutor(ConnectionManager connectionManager, SqlBuilder sqlBuilder)
         {
             if (connectionManager == null) throw new ArgumentNullException("connectionManager");
@@ -1532,6 +1366,7 @@ namespace EasyDapper
             _connectionManager = connectionManager;
             _sqlBuilder = sqlBuilder;
         }
+
         public IEnumerable<T> ExecuteStoredProcedure<T>(string procedureName, object parameters = null) where T : class
         {
             if (string.IsNullOrWhiteSpace(procedureName)) throw new ArgumentException("Procedure name cannot be null or empty", "procedureName");
@@ -1539,6 +1374,7 @@ namespace EasyDapper
             var openConnection = _connectionManager.GetOpenConnection();
             return openConnection.Query<T>(procedureName, param: parameters, transaction: _connectionManager.CurrentTransaction, commandTimeout: _connectionManager.CommandTimeout, commandType: CommandType.StoredProcedure);
         }
+
         public async Task<IEnumerable<T>> ExecuteStoredProcedureAsync<T>(string procedureName, object parameters = null, CancellationToken cancellationToken = default) where T : class
         {
             if (string.IsNullOrWhiteSpace(procedureName)) throw new ArgumentException("Procedure name cannot be null or empty", "procedureName");
@@ -1546,6 +1382,7 @@ namespace EasyDapper
             var openConnection = await _connectionManager.GetOpenConnectionAsync();
             return await openConnection.QueryAsync<T>(new CommandDefinition(procedureName, parameters, transaction: _connectionManager.CurrentTransaction, commandTimeout: _connectionManager.CommandTimeout, commandType: CommandType.StoredProcedure, cancellationToken: cancellationToken)).ConfigureAwait(false);
         }
+
         public T ExecuteMultiResultStoredProcedure<T>(string procedureName, Func<SqlMapper.GridReader, T> mapper, object parameters = null, IDbTransaction transaction = null, int? commandTimeout = null) where T : class
         {
             if (string.IsNullOrWhiteSpace(procedureName)) throw new ArgumentException("Procedure name cannot be null or empty", "procedureName");
@@ -1553,6 +1390,7 @@ namespace EasyDapper
             var openConnection = _connectionManager.GetOpenConnection();
             using (var multi = openConnection.QueryMultiple(procedureName, parameters, transaction ?? _connectionManager.CurrentTransaction, commandTimeout ?? _connectionManager.CommandTimeout, CommandType.StoredProcedure)) return mapper(multi);
         }
+
         public async Task<T> ExecuteMultiResultStoredProcedureAsync<T>(string procedureName, Func<SqlMapper.GridReader, Task<T>> asyncMapper, object parameters = null, IDbTransaction transaction = null, int? commandTimeout = null, CancellationToken cancellationToken = default) where T : class
         {
             if (string.IsNullOrWhiteSpace(procedureName)) throw new ArgumentException("Procedure name cannot be null or empty", "procedureName");
@@ -1560,6 +1398,7 @@ namespace EasyDapper
             var openConnection = await _connectionManager.GetOpenConnectionAsync();
             using (var multi = await openConnection.QueryMultipleAsync(new CommandDefinition(procedureName, parameters, transaction ?? _connectionManager.CurrentTransaction, commandTimeout ?? _connectionManager.CommandTimeout, CommandType.StoredProcedure, cancellationToken: cancellationToken)).ConfigureAwait(false)) return await asyncMapper(multi).ConfigureAwait(false);
         }
+
         public T ExecuteScalarFunction<T>(string functionName, object parameters = null)
         {
             if (string.IsNullOrWhiteSpace(functionName)) throw new ArgumentException("Function name cannot be null or empty", "functionName");
@@ -1569,6 +1408,7 @@ namespace EasyDapper
             var commandDefinition = new CommandDefinition(commandText: query, parameters: parameters, transaction: _connectionManager.CurrentTransaction, commandTimeout: _connectionManager.CommandTimeout);
             return connection.ExecuteScalar<T>(commandDefinition);
         }
+
         public async Task<T> ExecuteScalarFunctionAsync<T>(string functionName, object parameters = null, CancellationToken cancellationToken = default)
         {
             if (string.IsNullOrWhiteSpace(functionName)) throw new ArgumentException("Function name cannot be null or empty", "functionName");
@@ -1578,6 +1418,7 @@ namespace EasyDapper
             var commandDefinition = new CommandDefinition(commandText: query, parameters: parameters, transaction: _connectionManager.CurrentTransaction, commandTimeout: _connectionManager.CommandTimeout, cancellationToken: cancellationToken);
             return await connection.ExecuteScalarAsync<T>(commandDefinition);
         }
+
         public IEnumerable<T> ExecuteTableFunction<T>(string functionName, object parameters)
         {
             if (string.IsNullOrWhiteSpace(functionName)) throw new ArgumentException("Function name cannot be null or empty", "functionName");
@@ -1587,6 +1428,7 @@ namespace EasyDapper
             var commandDefinition = new CommandDefinition(commandText: query, parameters: parameters, transaction: _connectionManager.CurrentTransaction, commandTimeout: _connectionManager.CommandTimeout);
             return connection.Query<T>(commandDefinition);
         }
+
         public async Task<IEnumerable<T>> ExecuteTableFunctionAsync<T>(string functionName, object parameters, CancellationToken cancellationToken = default)
         {
             if (string.IsNullOrWhiteSpace(functionName)) throw new ArgumentException("Function name cannot be null or empty", "functionName");
@@ -1597,10 +1439,12 @@ namespace EasyDapper
             return await connection.QueryAsync<T>(commandDefinition);
         }
     }
+
     internal class EntityTracker : IDisposable
     {
         internal readonly ConcurrentDictionary<object, object> _attachedEntities = new ConcurrentDictionary<object, object>();
         private bool _disposed = false;
+
         public void Attach<T>(T entity) where T : class
         {
             if (entity == null) throw new ArgumentNullException("entity");
@@ -1612,6 +1456,7 @@ namespace EasyDapper
                 _attachedEntities.TryAdd(key, clone);
             }
         }
+
         public void Detach<T>(T entity) where T : class
         {
             if (entity == null) throw new ArgumentNullException("entity");
@@ -1619,15 +1464,18 @@ namespace EasyDapper
             var key = CreateCompositeKey(entity, primaryKeys);
             _attachedEntities.TryRemove(key, out _);
         }
+
         internal object CreateCompositeKey<T>(T entity, List<PropertyInfo> primaryKeys)
         {
             if (primaryKeys.Count == 1) return primaryKeys[0].GetValue(entity);
             return string.Join("|", primaryKeys.Select(p => p.GetValue(entity)?.ToString() ?? "NULL"));
         }
+
         internal List<string> GetChangedProperties<T>(T original, T current)
         {
             return typeof(T).GetProperties().Where(p => p.GetCustomAttribute<PrimaryKeyAttribute>(true) == null && !object.Equals(p.GetValue(original), p.GetValue(current))).Select(p => p.Name).ToList();
         }
+
         private T CloneEntity<T>(T entity)
         {
             var clone = Activator.CreateInstance<T>();
@@ -1643,11 +1491,13 @@ namespace EasyDapper
             }
             return clone;
         }
+
         public void Dispose()
         {
             Dispose(true);
             GC.SuppressFinalize(this);
         }
+
         protected virtual void Dispose(bool disposing)
         {
             if (_disposed) return;
@@ -1655,14 +1505,17 @@ namespace EasyDapper
             _disposed = true;
         }
     }
+
     internal class SqlBuilder
     {
         private readonly QueryCache _queryCache;
+
         public SqlBuilder(QueryCache queryCache)
         {
             if (queryCache == null) throw new ArgumentNullException("queryCache");
             _queryCache = queryCache;
         }
+
         public string BuildDynamicUpdateQuery<T>(List<string> changedProps, List<PropertyInfo> primaryKeys)
         {
             var tableName = _queryCache.GetTableName<T>();
@@ -1671,6 +1524,7 @@ namespace EasyDapper
             var whereClause = string.Join(" AND ", primaryKeys.Select(p => $"{_queryCache.GetColumnName(p)} = @pk_{p.Name}"));
             return $"UPDATE {tableName} SET {setClause} WHERE {whereClause}";
         }
+
         public DynamicParameters BuildParameters<T>(T entity, List<PropertyInfo> primaryKeys, List<string> changedProps)
         {
             var parameters = new DynamicParameters();
@@ -1682,6 +1536,7 @@ namespace EasyDapper
             }
             return parameters;
         }
+
         public DynamicParameters CreatePrimaryKeyParameters<T>(T entity)
         {
             var parameters = new DynamicParameters();
@@ -1689,6 +1544,7 @@ namespace EasyDapper
             foreach (var pk in primaryKeys) parameters.Add(pk.Name, pk.GetValue(entity));
             return parameters;
         }
+
         public DynamicParameters GetPrimaryKeyValues<T>(T entity)
         {
             var parameters = new DynamicParameters();
@@ -1699,13 +1555,16 @@ namespace EasyDapper
             }
             return parameters;
         }
+
         public string BuildScalarFunctionQuery(string functionName, object parameters) => $"SELECT {functionName}({BuildParameters(parameters)})";
         public string BuildTableFunctionQuery(string functionName, object parameters) => $"SELECT * FROM {functionName}({BuildParameters(parameters)})";
+
         private string BuildParameters(object parameters)
         {
             if (parameters == null) return "";
             return string.Join(", ", parameters.GetType().GetProperties().Select(p => $"@{p.Name}"));
         }
+
         public void ExecuteRawCommand(IDbConnection connection, IDbTransaction transaction, string commandText)
         {
             if (connection == null) throw new ArgumentNullException("connection");
@@ -1717,6 +1576,7 @@ namespace EasyDapper
                 command.ExecuteNonQuery();
             }
         }
+
         public DataTable ToDataTable<T>(IEnumerable<T> entities, IEnumerable<PropertyInfo> properties)
         {
             var dataTable = new DataTable();
