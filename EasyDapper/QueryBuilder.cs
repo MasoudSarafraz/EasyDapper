@@ -6,6 +6,7 @@ using System.Linq;
 using System.Linq.Expressions;
 using System.Reflection;
 using System.Text;
+using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
 using Dapper;
@@ -14,318 +15,52 @@ using System.Runtime.CompilerServices;
 
 namespace EasyDapper
 {
-    //internal sealed class LockFreeLruCache<TKey, TValue>
-    //{
-    //    private sealed class LruNode
-    //    {
-    //        public readonly TKey Key;
-    //        public readonly TValue Value;
-    //        public long Timestamp;
-    //        public LruNode(TKey key, TValue value)
-    //        {
-    //            Key = key;
-    //            Value = value;
-    //            Timestamp = DateTime.UtcNow.Ticks;
-    //        }
-    //    }
-
-    //    private readonly int _capacity;
-    //    private readonly ConcurrentDictionary<TKey, LruNode> _cache;
-    //    private long _lastEvictionTicks;
-
-    //    public LockFreeLruCache(int capacity)
-    //    {
-    //        if (capacity <= 0) throw new ArgumentOutOfRangeException("capacity");
-    //        _capacity = capacity;
-    //        _cache = new ConcurrentDictionary<TKey, LruNode>();
-    //        _lastEvictionTicks = DateTime.UtcNow.Ticks;
-    //    }
-
-    //    public TValue GetOrAdd(TKey key, Func<TKey, TValue> valueFactory)
-    //    {
-    //        if (key == null) throw new ArgumentNullException("key");
-    //        if (valueFactory == null) throw new ArgumentNullException("valueFactory");
-
-    //        LruNode node;
-    //        if (_cache.TryGetValue(key, out node))
-    //        {
-    //            Interlocked.Exchange(ref node.Timestamp, DateTime.UtcNow.Ticks);
-    //            return node.Value;
-    //        }
-
-    //        var newValue = valueFactory(key);
-    //        var newNode = new LruNode(key, newValue);
-
-    //        node = _cache.GetOrAdd(key, newNode);
-
-    //        if (node == newNode)
-    //        {
-    //            TryEvict();
-    //            return newValue;
-    //        }
-
-    //        Interlocked.Exchange(ref node.Timestamp, DateTime.UtcNow.Ticks);
-    //        return node.Value;
-    //    }
-
-    //    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    //    private void TryEvict()
-    //    {
-    //        var currentCount = _cache.Count;
-    //        if (currentCount <= _capacity * 1.2) return;
-
-    //        var nowTicks = DateTime.UtcNow.Ticks;
-    //        var lastEviction = Interlocked.Read(ref _lastEvictionTicks);
-
-    //        if (nowTicks - lastEviction < TimeSpan.TicksPerSecond) return;
-
-    //        if (Interlocked.CompareExchange(ref _lastEvictionTicks, nowTicks, lastEviction) == lastEviction)
-    //        {
-    //            Task.Run(() => EvictOldEntries());
-    //        }
-    //    }
-
-    //    private void EvictOldEntries()
-    //    {
-    //        try
-    //        {
-    //            var currentCount = _cache.Count;
-    //            if (currentCount <= _capacity) return;
-
-    //            var toRemove = _cache.OrderBy(x => x.Value.Timestamp)
-    //                               .Take(currentCount - _capacity)
-    //                               .Select(x => x.Key)
-    //                               .ToList();
-
-    //            foreach (var key in toRemove)
-    //            {
-    //                LruNode removed;
-    //                _cache.TryRemove(key, out removed);
-    //            }
-    //        }
-    //        catch { }
-    //    }
-    //}
-
-
-    internal sealed class LockFreeLruCache<TKey, TValue>
+    internal static class QueryBuilderCache
     {
-        private struct CacheEntry
+        private static readonly ConcurrentDictionary<Type, string> _tableNameCache = new ConcurrentDictionary<Type, string>();
+        private static readonly ConcurrentDictionary<MemberInfo, string> _columnNameCache = new ConcurrentDictionary<MemberInfo, string>();
+        private static readonly char[] InvalidIdentifierChars = new[] { ';', '-', '-', '/', '*', '\'', '"', '[', ']', '(', ')', '&', '|', '^', '%', '~', '`', '$', '{', '}', '<', '>', '?', '!', '=', '+', ',', ':', '\\', ' ', '\t', '\n', '\r' };
+
+        public static string GetTableName(Type type)
         {
-            public readonly TValue Value;
-            public long Timestamp;
-            public long AccessCount;
-
-            public CacheEntry(TValue value, long timestamp = 0, long accessCount = 1)
+            if (type == null) throw new ArgumentNullException("type");
+            return _tableNameCache.GetOrAdd(type, t =>
             {
-                Value = value;
-                Timestamp = timestamp == 0 ? DateTime.UtcNow.Ticks : timestamp;
-                AccessCount = accessCount;
-            }
-
-            [MethodImpl(MethodImplOptions.AggressiveInlining)]
-            public CacheEntry WithUpdatedAccess()
-            {
-                return new CacheEntry(
-                    Value,
-                    DateTime.UtcNow.Ticks,
-                    AccessCount + 1
-                );
-            }
+                var tableAttr = t.GetCustomAttribute<TableAttribute>();
+                var schema = tableAttr != null && !string.IsNullOrWhiteSpace(tableAttr.Schema) ? "[" + Sanitize(tableAttr.Schema) + "]" : "[dbo]";
+                var name = tableAttr != null && !string.IsNullOrWhiteSpace(tableAttr.TableName) ? "[" + Sanitize(tableAttr.TableName) + "]" : "[" + t.Name + "]";
+                return schema + "." + name;
+            });
         }
-
-        private readonly ConcurrentDictionary<TKey, CacheEntry> _cache;
-        private readonly int _capacity;
-        private readonly int _evictionSampleSize;
-        private long _lastEvictionTicks;
-        private volatile int _evictionInProgress;
-        private long _approximateSize;
-
-        public LockFreeLruCache(int capacity)
+        public static string GetColumnName(MemberInfo member)
         {
-            if (capacity <= 0) throw new ArgumentOutOfRangeException(nameof(capacity));
-
-            _capacity = capacity;
-            _cache = new ConcurrentDictionary<TKey, CacheEntry>();
-            _evictionSampleSize = Math.Min(50, Math.Max(10, capacity / 100));
-            _lastEvictionTicks = DateTime.UtcNow.Ticks;
-            _approximateSize = 0;
-        }
-
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        public TValue GetOrAdd(TKey key, Func<TKey, TValue> valueFactory)
-        {
-            if (key == null) throw new ArgumentNullException(nameof(key));
-            if (valueFactory == null) throw new ArgumentNullException(nameof(valueFactory));
-            bool wasAdded = false;
-            var resultEntry = _cache.AddOrUpdate(
-                key,
-                addValueFactory: k =>
-                {
-                    wasAdded = true;
-                    var value = valueFactory(k);
-                    return new CacheEntry(value);
-                },
-                updateValueFactory: (k, existing) =>
-                {
-                    return existing.WithUpdatedAccess();
-                });
-
-            if (wasAdded)
+            if (member == null) throw new ArgumentNullException("member", "MemberInfo cannot be null");
+            return _columnNameCache.GetOrAdd(member, m =>
             {
-                var newSize = Interlocked.Increment(ref _approximateSize);
-                if (newSize > _capacity)
-                {
-                    TryTriggerEviction();
-                }
-            }
-
-            return resultEntry.Value;
+                var column = m.GetCustomAttribute<ColumnAttribute>();
+                return column != null && !string.IsNullOrWhiteSpace(column.ColumnName) ? Sanitize(column.ColumnName) : Sanitize(m.Name);
+            });
         }
-
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        public bool TryGet(TKey key, out TValue value)
+        private static string Sanitize(string identifier)
         {
-            if (key == null) throw new ArgumentNullException(nameof(key));
-            CacheEntry resultEntry;
-            bool found = _cache.TryGetValue(key, out resultEntry);
-            if (found)
-            {
-                var updatedEntry = resultEntry.WithUpdatedAccess();
-                _cache.AddOrUpdate(key, updatedEntry, (k, old) => updatedEntry);
-                value = resultEntry.Value;
-                return true;
-            }
-
-            value = default(TValue);
-            return false;
-        }
-
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private void TryTriggerEviction()
-        {
-            var currentSize = Interlocked.Read(ref _approximateSize);
-            if (currentSize <= _capacity) return;
-            var now = DateTime.UtcNow.Ticks;
-            var lastEviction = Interlocked.Read(ref _lastEvictionTicks);
-            if (now - lastEviction < TimeSpan.TicksPerMillisecond * 100)
-                return;
-            if (Interlocked.CompareExchange(ref _lastEvictionTicks, now, lastEviction) == lastEviction)
-            {
-                if (Interlocked.CompareExchange(ref _evictionInProgress, 1, 0) == 0)
-                {
-                    ThreadPool.UnsafeQueueUserWorkItem(_ => PerformLockFreeEviction(), null);
-                }
-            }
-        }
-
-        private void PerformLockFreeEviction()
-        {
-            try
-            {
-                var currentSize = Interlocked.Read(ref _approximateSize);
-                if (currentSize <= _capacity) return;
-                int targetRemovals = Math.Min(_evictionSampleSize, (int)(currentSize - _capacity));
-                int removed = 0;
-                int attempts = 0;
-                int maxAttempts = targetRemovals * 5; // افزایش تلاش‌ها
-                //
-                var candidates = new System.Collections.Generic.List<TKey>();
-                foreach (var key in _cache.Keys)
-                {
-                    if (candidates.Count >= _evictionSampleSize * 2) break;
-                    candidates.Add(key);
-                }
-                foreach (var key in candidates)
-                {
-                    if (removed >= targetRemovals) break;
-                    if (attempts >= maxAttempts) break;
-                    CacheEntry entry;
-                    if (_cache.TryGetValue(key, out entry))
-                    {
-                        var age = DateTime.UtcNow.Ticks - entry.Timestamp;
-                        if (age > TimeSpan.TicksPerMinute)
-                        {
-                            CacheEntry ignored;
-                            if (_cache.TryRemove(key, out ignored))
-                            {
-                                Interlocked.Decrement(ref _approximateSize);
-                                removed++;
-                            }
-                        }
-                    }
-                    attempts++;
-                }
-                if (removed < targetRemovals)
-                {
-                    foreach (var key in _cache.Keys)
-                    {
-                        if (removed >= targetRemovals) break;
-
-                        CacheEntry ignored;
-                        if (_cache.TryRemove(key, out ignored))
-                        {
-                            Interlocked.Decrement(ref _approximateSize);
-                            removed++;
-                        }
-                    }
-                }
-            }
-            finally
-            {
-                Interlocked.Exchange(ref _approximateSize, _cache.Count);
-                Interlocked.Exchange(ref _evictionInProgress, 0);
-            }
-        }
-
-        public bool TryAdd(TKey key, TValue value)
-        {
-            if (key == null) throw new ArgumentNullException(nameof(key));
-
-            if (_cache.TryAdd(key, new CacheEntry(value)))
-            {
-                var newSize = Interlocked.Increment(ref _approximateSize);
-                if (newSize > _capacity)
-                {
-                    TryTriggerEviction();
-                }
-                return true;
-            }
-            return false;
-        }
-
-        public bool TryRemove(TKey key)
-        {
-            if (key == null) throw new ArgumentNullException(nameof(key));
-
-            CacheEntry ignored;
-            if (_cache.TryRemove(key, out ignored))
-            {
-                Interlocked.Decrement(ref _approximateSize);
-                return true;
-            }
-            return false;
-        }
-
-        public int Count => _cache.Count;
-        public int Capacity => _capacity;
-
-        public void Clear()
-        {
-            _cache.Clear();
-            Interlocked.Exchange(ref _approximateSize, 0);
+            if (string.IsNullOrWhiteSpace(identifier)) throw new ArgumentException("Identifier cannot be null or empty.", "identifier");
+            if (identifier.IndexOfAny(InvalidIdentifierChars) >= 0) throw new ArgumentException("Identifier contains invalid characters: " + identifier, "identifier");
+            return identifier;
         }
     }
 
+    internal class SqlTemplate
+    {
+        public string Sql { get; set; }
+        public List<string> LocalParameterNames { get; set; }
+    }
 
     internal sealed class ExpressionParser
     {
-        private static readonly LockFreeLruCache<Type, string> TableNameCache = new LockFreeLruCache<Type, string>(500);
-        private static readonly LockFreeLruCache<MemberInfo, string> ColumnNameCache = new LockFreeLruCache<MemberInfo, string>(3000);
-        private static readonly LockFreeLruCache<int, string> ExpressionCache = new LockFreeLruCache<int, string>(10000);
         private readonly AliasManager _aliasManager;
         private readonly ParameterBuilder _parameterBuilder;
-        private static readonly char[] InvalidIdentifierChars = new[] { ';', '-', '-', '/', '*', '\'', '"', '[', ']', '(', ')', '&', '|', '^', '%', '~', '`', '$', '{', '}', '<', '>', '?', '!', '=', '+', ',', ':', '\\', ' ', '\t', '\n', '\r' };
+        private static readonly ConcurrentDictionary<int, SqlTemplate> _expressionTemplateCache = new ConcurrentDictionary<int, SqlTemplate>();
+
         public ExpressionParser(AliasManager aliasManager, ParameterBuilder parameterBuilder)
         {
             if (aliasManager == null) throw new ArgumentNullException("aliasManager");
@@ -333,47 +68,185 @@ namespace EasyDapper
             _aliasManager = aliasManager;
             _parameterBuilder = parameterBuilder;
         }
+
         public string ParseExpression(Expression expression) => ParseExpressionInternal(expression, useBrackets: false, parameterAliases: null);
         public string ParseExpressionWithBrackets(Expression expression) => ParseExpressionInternal(expression, useBrackets: true, parameterAliases: null);
         public string ParseExpressionWithParameterMapping(Expression expression, Dictionary<ParameterExpression, string> parameterAliases) => ParseExpressionInternal(expression, useBrackets: false, parameterAliases: parameterAliases);
         public string ParseExpressionWithParameterMappingAndBrackets(Expression expression, Dictionary<ParameterExpression, string> parameterAliases) => ParseExpressionInternal(expression, useBrackets: true, parameterAliases: parameterAliases);
+
         private string ParseExpressionInternal(Expression expression, bool useBrackets, Dictionary<ParameterExpression, string> parameterAliases = null)
         {
             if (expression == null) throw new ArgumentNullException("expression");
-            var cacheKey = CalculateExpressionHash(expression, useBrackets, parameterAliases);
-            if (cacheKey != 0)
+            if (parameterAliases == null)
             {
-                var cached = ExpressionCache.GetOrAdd(cacheKey, _ => null);
-                if (cached != null) return cached;
+                var templateHash = CalculateTemplateHash(expression, useBrackets, parameterAliases);
+                var template = _expressionTemplateCache.GetOrAdd(templateHash, k => ParseToTemplate(expression, useBrackets, parameterAliases));
+                var constants = ExtractConstants(expression);
+                var sql = template.Sql;
+                if (constants.Count == template.LocalParameterNames.Count)
+                {
+                    for (int i = 0; i < constants.Count; i++)
+                    {
+                        var localName = template.LocalParameterNames[i];
+                        var value = constants[i];
+                        var globalName = _parameterBuilder.GetUniqueParameterName();
+                        _parameterBuilder.AddParameter(globalName, value);
+                        sql = SafeReplaceParameter(sql, localName, globalName);
+                    }
+                }
+                else
+                {
+                    throw new InvalidOperationException("Template parameter count mismatch.");
+                }
+                return sql;
             }
-            string result;
+            else
+            {
+                return ParseMainLogic(expression, useBrackets, parameterAliases, _parameterBuilder);
+            }
+        }
+
+        private List<object> ExtractConstants(Expression expression)
+        {
+            var extractor = new ConstantExtractor();
+            extractor.Visit(expression);
+            return extractor.Constants;
+        }
+
+        private SqlTemplate ParseToTemplate(Expression expression, bool useBrackets, Dictionary<ParameterExpression, string> parameterAliases)
+        {
+            var tempBuilder = new ParameterBuilder();
+            var sql = ParseMainLogic(expression, useBrackets, parameterAliases, tempBuilder);
+            var paramNames = tempBuilder.GetOrderedParameterNames();
+            return new SqlTemplate { Sql = sql, LocalParameterNames = paramNames };
+        }
+
+        private string ParseMainLogic(Expression expression, bool useBrackets, Dictionary<ParameterExpression, string> parameterAliases, ParameterBuilder paramBuilder)
+        {
             switch (expression.NodeType)
             {
-                case ExpressionType.Equal: result = useBrackets ? HandleEqualWithBrackets((BinaryExpression)expression, parameterAliases) : HandleEqual((BinaryExpression)expression, parameterAliases); break;
-                case ExpressionType.NotEqual: result = useBrackets ? HandleNotEqualWithBrackets((BinaryExpression)expression, parameterAliases) : HandleNotEqual((BinaryExpression)expression, parameterAliases); break;
+                case ExpressionType.Equal: return useBrackets ? HandleEqualWithBrackets((BinaryExpression)expression, parameterAliases, paramBuilder) : HandleEqual((BinaryExpression)expression, parameterAliases, paramBuilder);
+                case ExpressionType.NotEqual: return useBrackets ? HandleNotEqualWithBrackets((BinaryExpression)expression, parameterAliases, paramBuilder) : HandleNotEqual((BinaryExpression)expression, parameterAliases, paramBuilder);
                 case ExpressionType.GreaterThan:
                 case ExpressionType.LessThan:
                 case ExpressionType.GreaterThanOrEqual:
                 case ExpressionType.LessThanOrEqual:
                     var op = GetOperator(expression.NodeType);
-                    result = useBrackets ? HandleBinaryWithBrackets((BinaryExpression)expression, op, parameterAliases) : HandleBinary((BinaryExpression)expression, op, parameterAliases); break;
-                case ExpressionType.AndAlso: result = "(" + ParseExpressionInternal(((BinaryExpression)expression).Left, useBrackets, parameterAliases) + " AND " + ParseExpressionInternal(((BinaryExpression)expression).Right, useBrackets, parameterAliases) + ")"; break;
-                case ExpressionType.OrElse: result = "(" + ParseExpressionInternal(((BinaryExpression)expression).Left, useBrackets, parameterAliases) + " OR " + ParseExpressionInternal(((BinaryExpression)expression).Right, useBrackets, parameterAliases) + ")"; break;
-                case ExpressionType.Not: result = HandleNotExpression((UnaryExpression)expression, useBrackets, parameterAliases); break;
-                case ExpressionType.Call: result = useBrackets ? HandleMethodCallWithBrackets((MethodCallExpression)expression, parameterAliases) : HandleMethodCall((MethodCallExpression)expression, parameterAliases); break;
-                case ExpressionType.MemberAccess: result = HandleMemberAccess((MemberExpression)expression, useBrackets, parameterAliases); break;
-                case ExpressionType.Constant: result = HandleConstant((ConstantExpression)expression); break;
-                case ExpressionType.Convert: result = ParseExpressionInternal(((UnaryExpression)expression).Operand, useBrackets, parameterAliases); break;
-                case ExpressionType.Parameter: result = HandleParameter((ParameterExpression)expression, parameterAliases); break;
+                    return useBrackets ? HandleBinaryWithBrackets((BinaryExpression)expression, op, parameterAliases, paramBuilder) : HandleBinary((BinaryExpression)expression, op, parameterAliases, paramBuilder);
+                case ExpressionType.AndAlso: return "(" + ParseMainLogic(((BinaryExpression)expression).Left, useBrackets, parameterAliases, paramBuilder) + " AND " + ParseMainLogic(((BinaryExpression)expression).Right, useBrackets, parameterAliases, paramBuilder) + ")";
+                case ExpressionType.OrElse: return "(" + ParseMainLogic(((BinaryExpression)expression).Left, useBrackets, parameterAliases, paramBuilder) + " OR " + ParseMainLogic(((BinaryExpression)expression).Right, useBrackets, parameterAliases, paramBuilder) + ")";
+                case ExpressionType.Not: return HandleNotExpression((UnaryExpression)expression, useBrackets, parameterAliases, paramBuilder);
+                case ExpressionType.Call: return useBrackets ? HandleMethodCallWithBrackets((MethodCallExpression)expression, parameterAliases, paramBuilder) : HandleMethodCall((MethodCallExpression)expression, parameterAliases, paramBuilder);
+                case ExpressionType.MemberAccess: return HandleMemberAccess((MemberExpression)expression, useBrackets, parameterAliases);
+                case ExpressionType.Constant: return HandleConstant((ConstantExpression)expression, paramBuilder);
+                case ExpressionType.Convert: return ParseMainLogic(((UnaryExpression)expression).Operand, useBrackets, parameterAliases, paramBuilder);
+                case ExpressionType.Parameter: return HandleParameter((ParameterExpression)expression, parameterAliases);
                 default: throw new NotSupportedException("Expression type '" + expression.NodeType + "' is not supported");
             }
-            if (cacheKey != 0 && result != null)
-            {
-                ExpressionCache.GetOrAdd(cacheKey, _ => result);
-            }
-            return result;
         }
-        private string HandleNotExpression(UnaryExpression expression, bool useBrackets, Dictionary<ParameterExpression, string> parameterAliases)
+        private string HandleEqual(BinaryExpression expression, Dictionary<ParameterExpression, string> parameterAliases, ParameterBuilder paramBuilder)
+        {
+            if (expression == null) throw new ArgumentNullException("expression");
+            if (expression.Left.NodeType == ExpressionType.MemberAccess)
+            {
+                var leftMember = (MemberExpression)expression.Left;
+                if (leftMember.Type == typeof(bool) || leftMember.Type == typeof(bool?))
+                {
+                    var column = ParseMember(leftMember, parameterAliases);
+                    if (expression.Right.NodeType == ExpressionType.Constant)
+                    {
+                        var rightConst = (ConstantExpression)expression.Right;
+                        if (rightConst.Value is bool boolValue)
+                        {
+                            return leftMember.Type == typeof(bool?) ? "ISNULL(" + column + ", 0) = " + (boolValue ? 1 : 0) : column + " = " + (boolValue ? 1 : 0);
+                        }
+                    }
+                }
+            }
+            if (IsNullConstant(expression.Right)) return ParseMember(expression.Left, parameterAliases) + " IS NULL";
+            return HandleBinary(expression, "=", parameterAliases, paramBuilder);
+        }
+        private string HandleEqualWithBrackets(BinaryExpression expression, Dictionary<ParameterExpression, string> parameterAliases, ParameterBuilder paramBuilder)
+        {
+            if (expression == null) throw new ArgumentNullException("expression");
+            if (expression.Left.NodeType == ExpressionType.MemberAccess)
+            {
+                var leftMember = (MemberExpression)expression.Left;
+                if (leftMember.Type == typeof(bool) || leftMember.Type == typeof(bool?))
+                {
+                    var column = ParseMemberWithBrackets(leftMember, parameterAliases);
+                    if (expression.Right.NodeType == ExpressionType.Constant)
+                    {
+                        var rightConst = (ConstantExpression)expression.Right;
+                        if (rightConst.Value is bool boolValue)
+                        {
+                            return leftMember.Type == typeof(bool?) ? "ISNULL(" + column + ", 0) = " + (boolValue ? 1 : 0) : column + " = " + (boolValue ? 1 : 0);
+                        }
+                    }
+                }
+            }
+            if (IsNullConstant(expression.Right)) return ParseMemberWithBrackets(expression.Left, parameterAliases) + " IS NULL";
+            return HandleBinaryWithBrackets(expression, "=", parameterAliases, paramBuilder);
+        }
+        private string HandleNotEqual(BinaryExpression expression, Dictionary<ParameterExpression, string> parameterAliases, ParameterBuilder paramBuilder)
+        {
+            if (expression == null) throw new ArgumentNullException("expression");
+            if (expression.Left.NodeType == ExpressionType.MemberAccess)
+            {
+                var leftMember = (MemberExpression)expression.Left;
+                if (leftMember.Type == typeof(bool) || leftMember.Type == typeof(bool?))
+                {
+                    var column = ParseMember(leftMember, parameterAliases);
+                    if (expression.Right.NodeType == ExpressionType.Constant)
+                    {
+                        var rightConst = (ConstantExpression)expression.Right;
+                        if (rightConst.Value is bool boolValue)
+                        {
+                            return leftMember.Type == typeof(bool?) ? "ISNULL(" + column + ", 0) <> " + (boolValue ? 1 : 0) : column + " <> " + (boolValue ? 1 : 0);
+                        }
+                    }
+                }
+            }
+            if (IsNullConstant(expression.Right)) return ParseMember(expression.Left, parameterAliases) + " IS NOT NULL";
+            return HandleBinary(expression, "<>", parameterAliases, paramBuilder);
+        }
+        private string HandleNotEqualWithBrackets(BinaryExpression expression, Dictionary<ParameterExpression, string> parameterAliases, ParameterBuilder paramBuilder)
+        {
+            if (expression == null) throw new ArgumentNullException("expression");
+            if (expression.Left.NodeType == ExpressionType.MemberAccess)
+            {
+                var leftMember = (MemberExpression)expression.Left;
+                if (leftMember.Type == typeof(bool) || leftMember.Type == typeof(bool?))
+                {
+                    var column = ParseMemberWithBrackets(leftMember, parameterAliases);
+                    if (expression.Right.NodeType == ExpressionType.Constant)
+                    {
+                        var rightConst = (ConstantExpression)expression.Right;
+                        if (rightConst.Value is bool boolValue)
+                        {
+                            return leftMember.Type == typeof(bool?) ? "ISNULL(" + column + ", 0) <> " + (boolValue ? 1 : 0) : column + " <> " + (boolValue ? 1 : 0);
+                        }
+                    }
+                }
+            }
+            if (IsNullConstant(expression.Right)) return ParseMemberWithBrackets(expression.Left, parameterAliases) + " IS NOT NULL";
+            return HandleBinaryWithBrackets(expression, "<>", parameterAliases, paramBuilder);
+        }
+        private string HandleBinary(BinaryExpression expression, string op, Dictionary<ParameterExpression, string> parameterAliases, ParameterBuilder paramBuilder)
+        {
+            if (expression == null) throw new ArgumentNullException("expression");
+            var left = ParseMember(expression.Left, parameterAliases);
+            var right = ParseValue(expression.Right, paramBuilder, parameterAliases: parameterAliases);
+            return left + " " + op + " " + right;
+        }
+        private string HandleBinaryWithBrackets(BinaryExpression expression, string op, Dictionary<ParameterExpression, string> parameterAliases, ParameterBuilder paramBuilder)
+        {
+            if (expression == null) throw new ArgumentNullException("expression");
+            var left = ParseMemberWithBrackets(expression.Left, parameterAliases);
+            var right = ParseValue(expression.Right, paramBuilder, parameterAliases: parameterAliases);
+            return left + " " + op + " " + right;
+        }
+        private string HandleNotExpression(UnaryExpression expression, bool useBrackets, Dictionary<ParameterExpression, string> parameterAliases, ParameterBuilder paramBuilder)
         {
             var operand = expression.Operand;
             if (operand.NodeType == ExpressionType.Call)
@@ -394,22 +267,106 @@ namespace EasyDapper
                     return member.Type == typeof(bool?) ? "(ISNULL(" + column + ", 0) = 0 OR " + column + " IS NULL)" : column + " = 0";
                 }
             }
-            return "NOT (" + ParseExpressionInternal(operand, useBrackets, parameterAliases) + ")";
+            return "NOT (" + ParseMainLogic(operand, useBrackets, parameterAliases, paramBuilder) + ")";
         }
-        private string HandleMemberAccess(MemberExpression expression, bool useBrackets, Dictionary<ParameterExpression, string> parameterAliases)
+        private string HandleMethodCall(MethodCallExpression m, Dictionary<ParameterExpression, string> parameterAliases, ParameterBuilder paramBuilder)
         {
-            var memberExpr = expression;
-            if (memberExpr.Member.Name == "HasValue" && memberExpr.Expression != null && memberExpr.Expression.Type.IsGenericType && memberExpr.Expression.Type.GetGenericTypeDefinition() == typeof(Nullable<>))
+            if (m == null) throw new ArgumentNullException("m");
+            if (m.Method.DeclaringType == typeof(string))
             {
-                var column = useBrackets ? ParseMemberWithBrackets(memberExpr.Expression, parameterAliases) : ParseMember(memberExpr.Expression, parameterAliases);
-                return column + " IS NOT NULL";
+                if (m.Method.Name == "StartsWith") return HandleLike(m, "{0}%", parameterAliases, paramBuilder);
+                if (m.Method.Name == "EndsWith") return HandleLike(m, "%{0}", parameterAliases, paramBuilder);
+                if (m.Method.Name == "Contains") return HandleLike(m, "%{0}%", parameterAliases, paramBuilder);
             }
-            if (useBrackets && (memberExpr.Type == typeof(bool) || memberExpr.Type == typeof(bool?)))
+            if (m.Method.Name == "Contains" && m.Arguments.Count == 1)
             {
-                var column = useBrackets ? ParseMemberWithBrackets(memberExpr, parameterAliases) : ParseMember(memberExpr, parameterAliases);
-                return memberExpr.Type == typeof(bool?) ? "ISNULL(" + column + ", 0) = 1" : column + " = 1";
+                var memberExpr = m.Arguments[0];
+                var listObject = Evaluate(m.Object) as System.Collections.IEnumerable;
+                if (listObject == null) throw new NotSupportedException("Unsupported Contains signature or non-constant collection");
+                var memberSql = ParseMember(memberExpr, parameterAliases);
+                var items = new List<string>();
+                foreach (var item in listObject)
+                {
+                    var p = paramBuilder.GetUniqueParameterName();
+                    paramBuilder.AddParameter(p, item);
+                    items.Add(p);
+                }
+                return memberSql + " IN (" + string.Join(",", items) + ")";
             }
-            return useBrackets ? ParseMemberWithBrackets(memberExpr, parameterAliases) : ParseMember(memberExpr, parameterAliases);
+            if (m.Method.Name == "Between" && m.Arguments.Count == 3)
+            {
+                var property = ParseMember(m.Arguments[0], parameterAliases);
+                var lower = ParseValue(m.Arguments[1], paramBuilder, parameterAliases: parameterAliases);
+                var upper = ParseValue(m.Arguments[2], paramBuilder, parameterAliases: parameterAliases);
+                return property + " BETWEEN " + lower + " AND " + upper;
+            }
+            if (m.Method.Name == "IsNullOrEmpty" && m.Arguments.Count == 1 && m.Method.DeclaringType == typeof(string))
+            {
+                var prop = ParseMember(m.Arguments[0], parameterAliases);
+                return "(" + prop + " IS NULL OR " + prop + " = '')";
+            }
+            throw new NotSupportedException("Method '" + m.Method.Name + "' is not supported.");
+        }
+        private string HandleMethodCallWithBrackets(MethodCallExpression m, Dictionary<ParameterExpression, string> parameterAliases, ParameterBuilder paramBuilder)
+        {
+            if (m == null) throw new ArgumentNullException("m");
+            if (m.Method.DeclaringType == typeof(string))
+            {
+                if (m.Method.Name == "StartsWith") return HandleLikeWithBrackets(m, "{0}%", parameterAliases, paramBuilder);
+                if (m.Method.Name == "EndsWith") return HandleLikeWithBrackets(m, "%{0}", parameterAliases, paramBuilder);
+                if (m.Method.Name == "Contains") return HandleLikeWithBrackets(m, "%{0}%", parameterAliases, paramBuilder);
+            }
+            if (m.Method.Name == "Contains" && m.Arguments.Count == 1)
+            {
+                var memberExpr = m.Arguments[0];
+                var listObject = Evaluate(m.Object) as System.Collections.IEnumerable;
+                if (listObject == null) throw new NotSupportedException("Unsupported Contains signature or non-constant collection");
+                var memberSql = ParseMemberWithBrackets(memberExpr, parameterAliases);
+                var items = new List<string>();
+                foreach (var item in listObject)
+                {
+                    var p = paramBuilder.GetUniqueParameterName();
+                    paramBuilder.AddParameter(p, item);
+                    items.Add(p);
+                }
+                return memberSql + " IN (" + string.Join(",", items) + ")";
+            }
+            if (m.Method.Name == "Between" && m.Arguments.Count == 3)
+            {
+                var property = ParseMemberWithBrackets(m.Arguments[0], parameterAliases);
+                var lower = ParseValue(m.Arguments[1], paramBuilder, parameterAliases: parameterAliases);
+                var upper = ParseValue(m.Arguments[2], paramBuilder, parameterAliases: parameterAliases);
+                return property + " BETWEEN " + lower + " AND " + upper;
+            }
+            if (m.Method.Name == "IsNullOrEmpty" && m.Arguments.Count == 1 && m.Method.DeclaringType == typeof(string))
+            {
+                var prop = ParseMemberWithBrackets(m.Arguments[0], parameterAliases);
+                return "(" + prop + " IS NULL OR " + prop + " = '')";
+            }
+            throw new NotSupportedException("Method '" + m.Method.Name + "' is not supported");
+        }
+        private string HandleLike(MethodCallExpression m, string format, Dictionary<ParameterExpression, string> parameterAliases, ParameterBuilder paramBuilder)
+        {
+            if (m == null) throw new ArgumentNullException("m");
+            if (m.Object == null) throw new NotSupportedException("LIKE requires instance method call on string");
+            var prop = ParseMember(m.Object, parameterAliases);
+            var val = ParseValue(m.Arguments[0], paramBuilder, format, parameterAliases);
+            return prop + " LIKE " + val;
+        }
+        private string HandleLikeWithBrackets(MethodCallExpression m, string format, Dictionary<ParameterExpression, string> parameterAliases, ParameterBuilder paramBuilder)
+        {
+            if (m == null) throw new ArgumentNullException("m");
+            if (m.Object == null) throw new NotSupportedException("LIKE requires instance method call on string");
+            var prop = ParseMemberWithBrackets(m.Object, parameterAliases);
+            var val = ParseValue(m.Arguments[0], paramBuilder, format, parameterAliases);
+            return prop + " LIKE " + val;
+        }
+        private string HandleConstant(ConstantExpression expression, ParameterBuilder paramBuilder)
+        {
+            if (expression == null) throw new ArgumentNullException("expression");
+            var p = paramBuilder.GetUniqueParameterName();
+            paramBuilder.AddParameter(p, expression.Value);
+            return p;
         }
         private string HandleParameter(ParameterExpression expression, Dictionary<ParameterExpression, string> parameterAliases)
         {
@@ -417,6 +374,7 @@ namespace EasyDapper
             if (parameterAliases != null && parameterAliases.TryGetValue(paramExpr, out var alias)) return alias;
             return _aliasManager.GetAliasForType(paramExpr.Type);
         }
+
         public string ParseSelectMember(Expression expression)
         {
             if (expression == null) throw new ArgumentNullException("expression");
@@ -432,7 +390,7 @@ namespace EasyDapper
                     return ParseSelectMember(member.Expression);
                 }
                 if (_aliasManager.IsSubqueryAlias(tableAlias)) return tableAlias + "." + columnName + " AS " + columnName;
-                return tableAlias + ".[" + GetColumnName(member.Member) + "] AS " + columnName;
+                return tableAlias + ".[" + QueryBuilderCache.GetColumnName(member.Member) + "] AS " + columnName;
             }
             var newExpr = expression as NewExpression;
             if (newExpr != null)
@@ -452,7 +410,7 @@ namespace EasyDapper
                             continue;
                         }
                         if (_aliasManager.IsSubqueryAlias(tableAlias)) columns.Add(tableAlias + "." + columnName + " AS " + newExpr.Members[i].Name);
-                        else columns.Add(tableAlias + ".[" + GetColumnName(memberArg.Member) + "] AS " + newExpr.Members[i].Name);
+                        else columns.Add(tableAlias + ".[" + QueryBuilderCache.GetColumnName(memberArg.Member) + "] AS " + newExpr.Members[i].Name);
                     }
                     else
                     {
@@ -463,6 +421,7 @@ namespace EasyDapper
             }
             return ParseMemberWithBrackets(expression);
         }
+
         public List<string> ExtractColumnList(Expression expr)
         {
             if (expr == null) throw new ArgumentNullException("expr");
@@ -474,6 +433,7 @@ namespace EasyDapper
             else list.Add(ParseMember(expr));
             return list;
         }
+
         public List<string> ExtractColumnListWithBrackets(Expression expr)
         {
             if (expr == null) throw new ArgumentNullException("expr");
@@ -485,6 +445,7 @@ namespace EasyDapper
             else list.Add(ParseMemberWithBrackets(expr));
             return list;
         }
+
         public string ParseMemberWithBrackets(Expression expression, Dictionary<ParameterExpression, string> parameterAliases = null)
         {
             if (expression == null) throw new ArgumentNullException("expression");
@@ -502,9 +463,9 @@ namespace EasyDapper
                     var tableAlias = GetTableAliasForMember(member, parameterAliases);
                     var columnName = member.Member.Name;
                     if (_aliasManager.IsSubqueryAlias(tableAlias)) return tableAlias + "." + columnName;
-                    return tableAlias + ".[" + GetColumnName(member.Member) + "]";
+                    return tableAlias + ".[" + QueryBuilderCache.GetColumnName(member.Member) + "]";
                 }
-                return "[" + GetColumnName(member.Member) + "]";
+                return "[" + QueryBuilderCache.GetColumnName(member.Member) + "]";
             }
             var parameter = expression as ParameterExpression;
             if (parameter != null)
@@ -515,207 +476,23 @@ namespace EasyDapper
             }
             throw new NotSupportedException("Unsupported expression: " + expression);
         }
-        private string HandleEqual(BinaryExpression expression, Dictionary<ParameterExpression, string> parameterAliases = null)
+
+        private string HandleMemberAccess(MemberExpression expression, bool useBrackets, Dictionary<ParameterExpression, string> parameterAliases)
         {
-            if (expression == null) throw new ArgumentNullException("expression");
-            if (expression.Left.NodeType == ExpressionType.MemberAccess)
+            var memberExpr = expression;
+            if (memberExpr.Member.Name == "HasValue" && memberExpr.Expression != null && memberExpr.Expression.Type.IsGenericType && memberExpr.Expression.Type.GetGenericTypeDefinition() == typeof(Nullable<>))
             {
-                var leftMember = (MemberExpression)expression.Left;
-                if (leftMember.Type == typeof(bool) || leftMember.Type == typeof(bool?))
-                {
-                    var column = ParseMember(leftMember, parameterAliases);
-                    if (expression.Right.NodeType == ExpressionType.Constant)
-                    {
-                        var rightConst = (ConstantExpression)expression.Right;
-                        if (rightConst.Value is bool boolValue)
-                        {
-                            return leftMember.Type == typeof(bool?) ? "ISNULL(" + column + ", 0) = " + (boolValue ? 1 : 0) : column + " = " + (boolValue ? 1 : 0);
-                        }
-                    }
-                }
+                var column = useBrackets ? ParseMemberWithBrackets(memberExpr.Expression, parameterAliases) : ParseMember(memberExpr.Expression, parameterAliases);
+                return column + " IS NOT NULL";
             }
-            if (IsNullConstant(expression.Right)) return ParseMember(expression.Left, parameterAliases) + " IS NULL";
-            return HandleBinary(expression, "=", parameterAliases);
+            if (useBrackets && (memberExpr.Type == typeof(bool) || memberExpr.Type == typeof(bool?)))
+            {
+                var column = useBrackets ? ParseMemberWithBrackets(memberExpr, parameterAliases) : ParseMember(memberExpr, parameterAliases);
+                return memberExpr.Type == typeof(bool?) ? "ISNULL(" + column + ", 0) = 1" : column + " = 1";
+            }
+            return useBrackets ? ParseMemberWithBrackets(memberExpr, parameterAliases) : ParseMember(memberExpr, parameterAliases);
         }
-        private string HandleEqualWithBrackets(BinaryExpression expression, Dictionary<ParameterExpression, string> parameterAliases = null)
-        {
-            if (expression == null) throw new ArgumentNullException("expression");
-            if (expression.Left.NodeType == ExpressionType.MemberAccess)
-            {
-                var leftMember = (MemberExpression)expression.Left;
-                if (leftMember.Type == typeof(bool) || leftMember.Type == typeof(bool?))
-                {
-                    var column = ParseMemberWithBrackets(leftMember, parameterAliases);
-                    if (expression.Right.NodeType == ExpressionType.Constant)
-                    {
-                        var rightConst = (ConstantExpression)expression.Right;
-                        if (rightConst.Value is bool boolValue)
-                        {
-                            return leftMember.Type == typeof(bool?) ? "ISNULL(" + column + ", 0) = " + (boolValue ? 1 : 0) : column + " = " + (boolValue ? 1 : 0);
-                        }
-                    }
-                }
-            }
-            if (IsNullConstant(expression.Right)) return ParseMemberWithBrackets(expression.Left, parameterAliases) + " IS NULL";
-            return HandleBinaryWithBrackets(expression, "=", parameterAliases);
-        }
-        private string HandleNotEqual(BinaryExpression expression, Dictionary<ParameterExpression, string> parameterAliases = null)
-        {
-            if (expression == null) throw new ArgumentNullException("expression");
-            if (expression.Left.NodeType == ExpressionType.MemberAccess)
-            {
-                var leftMember = (MemberExpression)expression.Left;
-                if (leftMember.Type == typeof(bool) || leftMember.Type == typeof(bool?))
-                {
-                    var column = ParseMember(leftMember, parameterAliases);
-                    if (expression.Right.NodeType == ExpressionType.Constant)
-                    {
-                        var rightConst = (ConstantExpression)expression.Right;
-                        if (rightConst.Value is bool boolValue)
-                        {
-                            return leftMember.Type == typeof(bool?) ? "ISNULL(" + column + ", 0) <> " + (boolValue ? 1 : 0) : column + " <> " + (boolValue ? 1 : 0);
-                        }
-                    }
-                }
-            }
-            if (IsNullConstant(expression.Right)) return ParseMember(expression.Left, parameterAliases) + " IS NOT NULL";
-            return HandleBinary(expression, "<>", parameterAliases);
-        }
-        private string HandleNotEqualWithBrackets(BinaryExpression expression, Dictionary<ParameterExpression, string> parameterAliases = null)
-        {
-            if (expression == null) throw new ArgumentNullException("expression");
-            if (expression.Left.NodeType == ExpressionType.MemberAccess)
-            {
-                var leftMember = (MemberExpression)expression.Left;
-                if (leftMember.Type == typeof(bool) || leftMember.Type == typeof(bool?))
-                {
-                    var column = ParseMemberWithBrackets(leftMember, parameterAliases);
-                    if (expression.Right.NodeType == ExpressionType.Constant)
-                    {
-                        var rightConst = (ConstantExpression)expression.Right;
-                        if (rightConst.Value is bool boolValue)
-                        {
-                            return leftMember.Type == typeof(bool?) ? "ISNULL(" + column + ", 0) <> " + (boolValue ? 1 : 0) : column + " <> " + (boolValue ? 1 : 0);
-                        }
-                    }
-                }
-            }
-            if (IsNullConstant(expression.Right)) return ParseMemberWithBrackets(expression.Left, parameterAliases) + " IS NOT NULL";
-            return HandleBinaryWithBrackets(expression, "<>", parameterAliases);
-        }
-        private string HandleBinary(BinaryExpression expression, string op, Dictionary<ParameterExpression, string> parameterAliases = null)
-        {
-            if (expression == null) throw new ArgumentNullException("expression");
-            var left = ParseMember(expression.Left, parameterAliases);
-            var right = ParseValue(expression.Right, parameterAliases: parameterAliases);
-            return left + " " + op + " " + right;
-        }
-        private string HandleBinaryWithBrackets(BinaryExpression expression, string op, Dictionary<ParameterExpression, string> parameterAliases = null)
-        {
-            if (expression == null) throw new ArgumentNullException("expression");
-            var left = ParseMemberWithBrackets(expression.Left, parameterAliases);
-            var right = ParseValue(expression.Right, parameterAliases: parameterAliases);
-            return left + " " + op + " " + right;
-        }
-        private string HandleConstant(ConstantExpression expression)
-        {
-            if (expression == null) throw new ArgumentNullException("expression");
-            var p = _parameterBuilder.GetUniqueParameterName();
-            _parameterBuilder.AddParameter(p, expression.Value);
-            return p;
-        }
-        private string HandleMethodCall(MethodCallExpression m, Dictionary<ParameterExpression, string> parameterAliases = null)
-        {
-            if (m == null) throw new ArgumentNullException("m");
-            if (m.Method.DeclaringType == typeof(string))
-            {
-                if (m.Method.Name == "StartsWith") return HandleLike(m, "{0}%", parameterAliases);
-                if (m.Method.Name == "EndsWith") return HandleLike(m, "%{0}", parameterAliases);
-                if (m.Method.Name == "Contains") return HandleLike(m, "%{0}%", parameterAliases);
-            }
-            if (m.Method.Name == "Contains" && m.Arguments.Count == 1)
-            {
-                var memberExpr = m.Arguments[0];
-                var listObject = Evaluate(m.Object) as System.Collections.IEnumerable;
-                if (listObject == null) throw new NotSupportedException("Unsupported Contains signature or non-constant collection");
-                var memberSql = ParseMember(memberExpr, parameterAliases);
-                var items = new List<string>();
-                foreach (var item in listObject)
-                {
-                    var p = _parameterBuilder.GetUniqueParameterName();
-                    _parameterBuilder.AddParameter(p, item);
-                    items.Add(p);
-                }
-                return memberSql + " IN (" + string.Join(",", items) + ")";
-            }
-            if (m.Method.Name == "Between" && m.Arguments.Count == 3)
-            {
-                var property = ParseMember(m.Arguments[0], parameterAliases);
-                var lower = ParseValue(m.Arguments[1], parameterAliases: parameterAliases);
-                var upper = ParseValue(m.Arguments[2], parameterAliases: parameterAliases);
-                return property + " BETWEEN " + lower + " AND " + upper;
-            }
-            if (m.Method.Name == "IsNullOrEmpty" && m.Arguments.Count == 1 && m.Method.DeclaringType == typeof(string))
-            {
-                var prop = ParseMember(m.Arguments[0], parameterAliases);
-                return "(" + prop + " IS NULL OR " + prop + " = '')";
-            }
-            throw new NotSupportedException("Method '" + m.Method.Name + "' is not supported.");
-        }
-        private string HandleMethodCallWithBrackets(MethodCallExpression m, Dictionary<ParameterExpression, string> parameterAliases = null)
-        {
-            if (m == null) throw new ArgumentNullException("m");
-            if (m.Method.DeclaringType == typeof(string))
-            {
-                if (m.Method.Name == "StartsWith") return HandleLikeWithBrackets(m, "{0}%", parameterAliases);
-                if (m.Method.Name == "EndsWith") return HandleLikeWithBrackets(m, "%{0}", parameterAliases);
-                if (m.Method.Name == "Contains") return HandleLikeWithBrackets(m, "%{0}%", parameterAliases);
-            }
-            if (m.Method.Name == "Contains" && m.Arguments.Count == 1)
-            {
-                var memberExpr = m.Arguments[0];
-                var listObject = Evaluate(m.Object) as System.Collections.IEnumerable;
-                if (listObject == null) throw new NotSupportedException("Unsupported Contains signature or non-constant collection");
-                var memberSql = ParseMemberWithBrackets(memberExpr, parameterAliases);
-                var items = new List<string>();
-                foreach (var item in listObject)
-                {
-                    var p = _parameterBuilder.GetUniqueParameterName();
-                    _parameterBuilder.AddParameter(p, item);
-                    items.Add(p);
-                }
-                return memberSql + " IN (" + string.Join(",", items) + ")";
-            }
-            if (m.Method.Name == "Between" && m.Arguments.Count == 3)
-            {
-                var property = ParseMemberWithBrackets(m.Arguments[0], parameterAliases);
-                var lower = ParseValue(m.Arguments[1], parameterAliases: parameterAliases);
-                var upper = ParseValue(m.Arguments[2], parameterAliases: parameterAliases);
-                return property + " BETWEEN " + lower + " AND " + upper;
-            }
-            if (m.Method.Name == "IsNullOrEmpty" && m.Arguments.Count == 1 && m.Method.DeclaringType == typeof(string))
-            {
-                var prop = ParseMemberWithBrackets(m.Arguments[0], parameterAliases);
-                return "(" + prop + " IS NULL OR " + prop + " = '')";
-            }
-            throw new NotSupportedException("Method '" + m.Method.Name + "' is not supported");
-        }
-        private string HandleLike(MethodCallExpression m, string format, Dictionary<ParameterExpression, string> parameterAliases = null)
-        {
-            if (m == null) throw new ArgumentNullException("m");
-            if (m.Object == null) throw new NotSupportedException("LIKE requires instance method call on string");
-            var prop = ParseMember(m.Object, parameterAliases);
-            var val = ParseValue(m.Arguments[0], format, parameterAliases);
-            return prop + " LIKE " + val;
-        }
-        private string HandleLikeWithBrackets(MethodCallExpression m, string format, Dictionary<ParameterExpression, string> parameterAliases = null)
-        {
-            if (m == null) throw new ArgumentNullException("m");
-            if (m.Object == null) throw new NotSupportedException("LIKE requires instance method call on string");
-            var prop = ParseMemberWithBrackets(m.Object, parameterAliases);
-            var val = ParseValue(m.Arguments[0], format, parameterAliases);
-            return prop + " LIKE " + val;
-        }
+
         private string ParseMember(Expression expression, Dictionary<ParameterExpression, string> parameterAliases = null)
         {
             if (expression == null) throw new ArgumentNullException("expression");
@@ -733,9 +510,9 @@ namespace EasyDapper
                     var tableAlias = GetTableAliasForMember(member, parameterAliases);
                     var columnName = member.Member.Name;
                     if (_aliasManager.IsSubqueryAlias(tableAlias)) return tableAlias + "." + columnName;
-                    return tableAlias + ".[" + GetColumnName(member.Member) + "]";
+                    return tableAlias + ".[" + QueryBuilderCache.GetColumnName(member.Member) + "]";
                 }
-                return "[" + GetColumnName(member.Member) + "]";
+                return "[" + QueryBuilderCache.GetColumnName(member.Member) + "]";
             }
             var parameter = expression as ParameterExpression;
             if (parameter != null)
@@ -745,6 +522,7 @@ namespace EasyDapper
             }
             throw new NotSupportedException("Unsupported expression: " + expression);
         }
+
         private string GetTableAliasForMember(MemberExpression member, Dictionary<ParameterExpression, string> parameterAliases = null)
         {
             if (member == null) throw new ArgumentNullException("member");
@@ -754,27 +532,23 @@ namespace EasyDapper
                 if (_aliasManager.TryGetSubQueryAlias(paramExpr.Type, out var subQueryAlias)) return subQueryAlias;
                 var memberType = member.Member.DeclaringType;
                 if (_aliasManager.TryGetTypeAlias(memberType, out var mainAlias)) return mainAlias;
-                var tableName = GetTableName(memberType);
-                foreach (var mapping in _aliasManager.GetAllTableAliases())
-                {
-                    if (mapping.Key.StartsWith(tableName + "_")) return mapping.Value;
-                }
                 return _aliasManager.GetAliasForType(memberType);
             }
             if (member.Expression is MemberExpression nestedMember) return GetTableAliasForMember(nestedMember, parameterAliases);
             if (member.Expression != null) return ParseMemberWithBrackets(member.Expression, parameterAliases);
             return null;
         }
-        private string ParseValue(Expression expression, string format = null, Dictionary<ParameterExpression, string> parameterAliases = null)
+
+        private string ParseValue(Expression expression, ParameterBuilder paramBuilder, string format = null, Dictionary<ParameterExpression, string> parameterAliases = null)
         {
             if (expression == null) throw new ArgumentNullException("expression");
             var constant = expression as ConstantExpression;
             if (constant != null)
             {
-                var p = _parameterBuilder.GetUniqueParameterName();
+                var p = paramBuilder.GetUniqueParameterName();
                 var v = constant.Value;
                 if (format != null && v is string) v = string.Format(format, v);
-                _parameterBuilder.AddParameter(p, v);
+                paramBuilder.AddParameter(p, v);
                 return p;
             }
             var member = expression as MemberExpression;
@@ -783,26 +557,27 @@ namespace EasyDapper
                 if (member.Expression != null && member.Expression.NodeType == ExpressionType.Constant)
                 {
                     var value = GetValue(member);
-                    var p = _parameterBuilder.GetUniqueParameterName();
-                    _parameterBuilder.AddParameter(p, value);
+                    var p = paramBuilder.GetUniqueParameterName();
+                    paramBuilder.AddParameter(p, value);
                     return p;
                 }
                 return ParseMember(member, parameterAliases);
             }
             var unary = expression as UnaryExpression;
-            if (unary != null) return ParseValue(unary.Operand, format, parameterAliases);
+            if (unary != null) return ParseValue(unary.Operand, paramBuilder, format, parameterAliases);
             var binary = expression as BinaryExpression;
             if (binary != null)
             {
-                var left = ParseValue(binary.Left, format, parameterAliases);
-                var right = ParseValue(binary.Right, format, parameterAliases);
+                var left = ParseValue(binary.Left, paramBuilder, format, parameterAliases);
+                var right = ParseValue(binary.Right, paramBuilder, format, parameterAliases);
                 return left + " " + GetOperator(binary.NodeType) + " " + right;
             }
             var eval = Evaluate(expression);
-            var p2 = _parameterBuilder.GetUniqueParameterName();
-            _parameterBuilder.AddParameter(p2, eval);
+            var p2 = paramBuilder.GetUniqueParameterName();
+            paramBuilder.AddParameter(p2, eval);
             return p2;
         }
+
         private static object Evaluate(Expression expr)
         {
             if (expr == null) return null;
@@ -818,6 +593,7 @@ namespace EasyDapper
                 return null;
             }
         }
+
         private static object GetValue(MemberExpression member)
         {
             if (member == null) throw new ArgumentNullException("member");
@@ -828,6 +604,7 @@ namespace EasyDapper
             if (pi != null) return pi.GetValue(obj, null);
             return null;
         }
+
         private static string GetOperator(ExpressionType nodeType)
         {
             switch (nodeType)
@@ -843,40 +620,20 @@ namespace EasyDapper
                 default: throw new NotSupportedException("Unsupported operator: " + nodeType);
             }
         }
+
         private bool IsNullConstant(Expression expression)
         {
             if (expression == null) return false;
             var c = expression as ConstantExpression;
             return c != null && c.Value == null;
         }
-        private string GetTableName(Type type)
+
+        private string SafeReplaceParameter(string sql, string oldName, string newName)
         {
-            if (type == null) throw new ArgumentNullException("type");
-            return TableNameCache.GetOrAdd(type, t =>
-            {
-                var tableAttr = t.GetCustomAttribute<TableAttribute>();
-                var schema = tableAttr != null && !string.IsNullOrWhiteSpace(tableAttr.Schema) ? SanitizeIdentifier(tableAttr.Schema) : "dbo";
-                var name = tableAttr != null && !string.IsNullOrWhiteSpace(tableAttr.TableName) ? SanitizeIdentifier(tableAttr.TableName) : SanitizeIdentifier(t.Name);
-                return "[" + schema + "].[" + name + "]";
-            });
+            return Regex.Replace(sql, @"\b" + Regex.Escape(oldName) + @"\b", newName, RegexOptions.IgnoreCase);
         }
-        private string GetColumnName(MemberInfo member)
-        {
-            if (member == null) throw new ArgumentNullException("member", "MemberInfo cannot be null");
-            return ColumnNameCache.GetOrAdd(member, m =>
-            {
-                var column = m.GetCustomAttribute<ColumnAttribute>();
-                return column != null && !string.IsNullOrWhiteSpace(column.ColumnName) ? SanitizeIdentifier(column.ColumnName) : SanitizeIdentifier(m.Name);
-            });
-        }
-        private string SanitizeIdentifier(string identifier)
-        {
-            if (string.IsNullOrWhiteSpace(identifier)) throw new ArgumentException("Identifier cannot be null or empty.", "identifier");
-            if (identifier.IndexOfAny(InvalidIdentifierChars) >= 0) throw new ArgumentException("Identifier contains invalid characters: " + identifier, "identifier");
-            return identifier;
-        }
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private int CalculateExpressionHash(Expression expression, bool useBrackets, Dictionary<ParameterExpression, string> parameterAliases)
+
+        private int CalculateTemplateHash(Expression expression, bool useBrackets, Dictionary<ParameterExpression, string> parameterAliases)
         {
             if (expression == null) return 0;
             unchecked
@@ -884,25 +641,128 @@ namespace EasyDapper
                 int hash = expression.NodeType.GetHashCode();
                 hash = (hash * 397) ^ useBrackets.GetHashCode();
                 hash = (hash * 397) ^ expression.Type.GetHashCode();
-                if (parameterAliases != null)
+
+                if (expression is MemberExpression m)
                 {
-                    foreach (var kvp in parameterAliases)
-                    {
-                        hash = (hash * 397) ^ kvp.Key.GetHashCode();
-                        hash = (hash * 397) ^ (kvp.Value?.GetHashCode() ?? 0);
-                    }
+                    hash = (hash * 397) ^ m.Member.Name.GetHashCode();
+                    if (m.Expression != null) hash = (hash * 397) ^ CalculateTemplateHash(m.Expression, false, null);
                 }
+                else if (expression is MethodCallExpression mc)
+                {
+                    hash = (hash * 397) ^ mc.Method.Name.GetHashCode();
+                    if (mc.Object != null) hash = (hash * 397) ^ CalculateTemplateHash(mc.Object, false, null);
+                    foreach (var arg in mc.Arguments) hash = (hash * 397) ^ CalculateTemplateHash(arg, false, null);
+                }
+                else if (expression is BinaryExpression b)
+                {
+                    hash = (hash * 397) ^ CalculateTemplateHash(b.Left, false, null);
+                    hash = (hash * 397) ^ CalculateTemplateHash(b.Right, false, null);
+                }
+                else if (expression is UnaryExpression u)
+                {
+                    hash = (hash * 397) ^ CalculateTemplateHash(u.Operand, false, null);
+                }
+                else if (expression is ParameterExpression p)
+                {
+                    if (parameterAliases != null && parameterAliases.TryGetValue(p, out var alias)) hash = (hash * 397) ^ alias.GetHashCode();
+                    else hash = (hash * 397) ^ p.Type.GetHashCode();
+                }
+
                 return hash;
             }
         }
+
+        private class ConstantExtractor : ExpressionVisitor
+        {
+            public readonly List<object> Constants = new List<object>();
+
+            protected override Expression VisitConstant(ConstantExpression node)
+            {
+                if (node.Type.IsValueType || node.Type == typeof(string) || node.Type == typeof(DateTime))
+                {
+                    Constants.Add(node.Value);
+                }
+                return base.VisitConstant(node);
+            }
+
+            protected override Expression VisitMember(MemberExpression node)
+            {
+                if (node.Expression != null && node.Expression.NodeType == ExpressionType.Constant)
+                {
+                    var obj = ((ConstantExpression)node.Expression).Value;
+                    if (obj != null)
+                    {
+                        var fi = node.Member as FieldInfo;
+                        var pi = node.Member as PropertyInfo;
+
+                        object val = null;
+                        if (fi != null) val = fi.GetValue(obj);
+                        else if (pi != null) val = pi.GetValue(obj, null);
+
+                        Constants.Add(val);
+                        return node;
+                    }
+                }
+                return base.VisitMember(node);
+            }
+        }
     }
+
+    internal sealed class ParameterBuilder
+    {
+        private readonly ConcurrentDictionary<string, object> _parameters = new ConcurrentDictionary<string, object>();
+        private int _paramCounter = 0;
+        private readonly List<string> _orderOfCreation = new List<string>();
+
+        public string GetUniqueParameterName()
+        {
+            lock (_orderOfCreation)
+            {
+                var id = Interlocked.Increment(ref _paramCounter);
+                var name = "@p" + id.ToString();
+                _orderOfCreation.Add(name);
+                return name;
+            }
+        }
+
+        public void AddParameter(string name, object value)
+        {
+            if (string.IsNullOrEmpty(name)) throw new ArgumentNullException("name");
+            _parameters[name] = value;
+            if (!_orderOfCreation.Contains(name)) lock (_orderOfCreation) _orderOfCreation.Add(name);
+        }
+
+        public Dictionary<string, string> MergeParameters(ConcurrentDictionary<string, object> sourceParameters)
+        {
+            var renamings = new Dictionary<string, string>();
+            if (sourceParameters == null) return renamings;
+            foreach (var kv in sourceParameters)
+            {
+                string newName = kv.Key;
+                if (_parameters.ContainsKey(kv.Key))
+                {
+                    newName = GetUniqueParameterName();
+                    renamings[kv.Key] = newName;
+                }
+                _parameters[newName] = kv.Value;
+            }
+            return renamings;
+        }
+
+        public ConcurrentDictionary<string, object> GetParameters()
+        {
+            return _parameters;
+        }
+
+        public List<string> GetOrderedParameterNames()
+        {
+            return _orderOfCreation.ToList();
+        }
+    }
+
     internal sealed class AliasManager
     {
-        private sealed class AliasInfo
-        {
-            public AliasType Type { get; set; }
-            public object Key { get; set; }
-        }
+        private sealed class AliasInfo { public AliasType Type { get; set; } public object Key { get; set; } }
         private enum AliasType { Table, Type, SubQuery }
         private readonly ConcurrentDictionary<string, AliasInfo> _allAliases = new ConcurrentDictionary<string, AliasInfo>();
         private readonly ConcurrentDictionary<string, string> _tableToAlias = new ConcurrentDictionary<string, string>();
@@ -910,6 +770,7 @@ namespace EasyDapper
         private readonly ConcurrentDictionary<Type, string> _subQueryTypeToAlias = new ConcurrentDictionary<Type, string>();
         private int _aliasCounter = 1;
         private int _subQueryCounter = 1;
+
         public string GenerateAlias(string tableName)
         {
             if (string.IsNullOrWhiteSpace(tableName)) throw new ArgumentNullException("tableName");
@@ -918,6 +779,7 @@ namespace EasyDapper
             var counter = Interlocked.Increment(ref _aliasCounter);
             return string.Format("{0}_A{1}", shortName, counter);
         }
+
         public string GenerateSubQueryAlias(string tableName)
         {
             if (string.IsNullOrWhiteSpace(tableName)) throw new ArgumentNullException("tableName");
@@ -926,6 +788,7 @@ namespace EasyDapper
             var counter = Interlocked.Increment(ref _subQueryCounter);
             return string.Format("{0}_SQ{1}", shortName, counter);
         }
+
         public void SetTableAlias(string tableName, string alias)
         {
             if (string.IsNullOrEmpty(tableName) || string.IsNullOrEmpty(alias)) throw new ArgumentException("Table name and alias cannot be null or empty.");
@@ -938,10 +801,11 @@ namespace EasyDapper
             }
             _tableToAlias.AddOrUpdate(tableName, alias, (k, v) => alias);
         }
+
         public void SetTypeAlias(Type type, string alias)
         {
             if (type == null || string.IsNullOrEmpty(alias)) throw new ArgumentException("Type and alias cannot be null or empty.");
-            var targetTableName = GetTableName(type);
+            var targetTableName = QueryBuilderCache.GetTableName(type);
             if (_allAliases.TryGetValue(alias, out var existingInfo))
             {
                 if (existingInfo.Type == AliasType.Table && existingInfo.Key is string existingTableName && existingTableName == targetTableName)
@@ -958,6 +822,7 @@ namespace EasyDapper
                 _typeToAlias.AddOrUpdate(type, alias, (k, v) => alias);
             }
         }
+
         public void SetSubQueryAlias(Type type, string alias)
         {
             if (type == null || string.IsNullOrEmpty(alias)) throw new ArgumentException("Type and alias cannot be null or empty.");
@@ -970,6 +835,7 @@ namespace EasyDapper
             }
             _subQueryTypeToAlias.AddOrUpdate(type, alias, (k, v) => alias);
         }
+
         public string GetAliasForTable(string tableName)
         {
             if (string.IsNullOrWhiteSpace(tableName)) throw new ArgumentNullException("tableName");
@@ -987,19 +853,21 @@ namespace EasyDapper
                 }
             });
         }
+
         public string GetAliasForType(Type type)
         {
             if (type == null) throw new ArgumentNullException("type");
             return _typeToAlias.GetOrAdd(type, t =>
             {
-                var tableName = GetTableName(t);
+                var tableName = QueryBuilderCache.GetTableName(t);
                 return GetAliasForTable(tableName);
             });
         }
+
         public string GetUniqueAliasForType(Type type)
         {
             if (type == null) throw new ArgumentNullException("type");
-            var tableName = GetTableName(type);
+            var tableName = QueryBuilderCache.GetTableName(type);
             string newAlias;
             while (true)
             {
@@ -1012,16 +880,19 @@ namespace EasyDapper
                 }
             }
         }
+
         public bool TryGetTypeAlias(Type type, out string alias)
         {
             if (type == null) { alias = null; return false; }
             return _typeToAlias.TryGetValue(type, out alias);
         }
+
         public bool TryGetSubQueryAlias(Type type, out string alias)
         {
             if (type == null) { alias = null; return false; }
             return _subQueryTypeToAlias.TryGetValue(type, out alias);
         }
+
         public bool IsSubqueryAlias(string alias)
         {
             if (string.IsNullOrEmpty(alias)) return false;
@@ -1031,11 +902,14 @@ namespace EasyDapper
             }
             return false;
         }
+
         public IEnumerable<KeyValuePair<string, string>> GetAllTableAliases()
         {
             return _allAliases.Where(kvp => kvp.Value.Type == AliasType.Table).Select(kvp => new KeyValuePair<string, string>((string)kvp.Value.Key, kvp.Key));
         }
+
         public void ValidateAliases() { }
+
         public void ClearAliases()
         {
             _allAliases.Clear();
@@ -1045,50 +919,8 @@ namespace EasyDapper
             Interlocked.Exchange(ref _aliasCounter, 1);
             Interlocked.Exchange(ref _subQueryCounter, 1);
         }
-        private string GetTableName(Type type)
-        {
-            if (type == null) throw new ArgumentNullException("type");
-            var tableAttr = type.GetCustomAttribute<TableAttribute>();
-            var schema = tableAttr != null && !string.IsNullOrWhiteSpace(tableAttr.Schema) ? "[" + tableAttr.Schema + "]" : "[dbo]";
-            var name = tableAttr != null && !string.IsNullOrWhiteSpace(tableAttr.TableName) ? "[" + tableAttr.TableName + "]" : "[" + type.Name + "]";
-            return schema + "." + name;
-        }
     }
-    internal sealed class ParameterBuilder
-    {
-        private readonly ConcurrentDictionary<string, object> _parameters = new ConcurrentDictionary<string, object>();
-        private int _paramCounter = 0;
-        public string GetUniqueParameterName()
-        {
-            var id = Interlocked.Increment(ref _paramCounter);
-            return "@p" + id.ToString();
-        }
-        public void AddParameter(string name, object value)
-        {
-            if (string.IsNullOrEmpty(name)) throw new ArgumentNullException("name");
-            _parameters.TryAdd(name, value);
-        }
-        public Dictionary<string, string> MergeParameters(ConcurrentDictionary<string, object> sourceParameters)
-        {
-            var renamings = new Dictionary<string, string>();
-            if (sourceParameters == null) return renamings;
-            foreach (var kv in sourceParameters)
-            {
-                string newName = kv.Key;
-                if (_parameters.ContainsKey(kv.Key))
-                {
-                    newName = GetUniqueParameterName();
-                    renamings[kv.Key] = newName;
-                }
-                _parameters.TryAdd(newName, kv.Value);
-            }
-            return renamings;
-        }
-        public ConcurrentDictionary<string, object> GetParameters()
-        {
-            return _parameters;
-        }
-    }
+
     internal sealed class QueryBuilderCore<T> : IDisposable
     {
         private readonly Lazy<IDbConnection> _lazyConnection;
@@ -1115,8 +947,8 @@ namespace EasyDapper
         private int? _offset = null;
         private readonly object _pagingLock = new object();
         private bool _disposed = false;
-        private static readonly SemaphoreSlim _connectionSemaphore = new SemaphoreSlim(Environment.ProcessorCount * 2, Environment.ProcessorCount * 2);
         private static readonly char[] InvalidAliasChars = new[] { ']', ';', '-', '-', '/', '*', '\'', '"' };
+
         private static void ValidateCustomAlias(string alias)
         {
             if (!string.IsNullOrEmpty(alias) && alias.IndexOfAny(InvalidAliasChars) >= 0)
@@ -1124,61 +956,76 @@ namespace EasyDapper
                 throw new ArgumentException("Custom alias contains invalid characters.", "alias");
             }
         }
+
         private static string QuoteIdentifier(string identifier)
         {
             if (string.IsNullOrEmpty(identifier)) return identifier;
             return "[" + identifier + "]";
         }
-        public QueryBuilderCore(IDbConnection connection, AliasManager aliasManager, ParameterBuilder parameterBuilder, ExpressionParser expressionParser)
+
+        private readonly bool _ownsConnection;
+
+        public QueryBuilderCore(IDbConnection connection, AliasManager aliasManager, ParameterBuilder parameterBuilder, ExpressionParser expressionParser, bool ownsConnection = false)
         {
             if (connection == null) throw new ArgumentNullException("connection");
             _lazyConnection = new Lazy<IDbConnection>(() => connection);
+            _ownsConnection = ownsConnection;
             _aliasManager = aliasManager ?? throw new ArgumentNullException("aliasManager");
             _parameterBuilder = parameterBuilder ?? throw new ArgumentNullException("parameterBuilder");
             _expressionParser = expressionParser ?? throw new ArgumentNullException("expressionParser");
             _timeOut = _lazyConnection.Value.ConnectionTimeout;
-            var mainTableName = GetTableName(typeof(T));
+            var mainTableName = QueryBuilderCache.GetTableName(typeof(T));
             var mainAlias = _aliasManager.GenerateAlias(mainTableName);
             _aliasManager.SetTableAlias(mainTableName, mainAlias);
             _aliasManager.SetTypeAlias(typeof(T), mainAlias);
         }
+
         public void Where(Expression<Func<T, bool>> filter)
         {
             if (filter == null) throw new ArgumentNullException("filter");
             _filters.Enqueue(_expressionParser.ParseExpressionWithBrackets(filter.Body));
         }
+
         public void Select(params Expression<Func<T, object>>[] columns)
         {
             if (columns == null) return;
             foreach (var c in columns) if (c != null) _selectedColumnsQueue.Enqueue(_expressionParser.ParseSelectMember(c.Body));
         }
+
         public void Select<TSource>(params Expression<Func<TSource, object>>[] columns)
         {
             if (columns == null) return;
             foreach (var c in columns) if (c != null) _selectedColumnsQueue.Enqueue(_expressionParser.ParseSelectMember(c.Body));
         }
+
         public void Distinct() => SetClause(ref _distinctClause, "DISTINCT");
+
         public void Top(int count)
         {
             if (count <= 0) throw new ArgumentOutOfRangeException("count");
             SetClause(ref _topClause, "TOP (" + count + ")");
         }
+
         public void Count() => SetFlag(ref _isCountQuery, true);
+
         public void OrderBy(string orderByClause)
         {
             if (string.IsNullOrEmpty(orderByClause)) return;
             _orderByQueue.Enqueue(orderByClause);
         }
+
         public void OrderByAscending(Expression<Func<T, object>> keySelector)
         {
             if (keySelector == null) throw new ArgumentNullException("keySelector");
             foreach (var col in _expressionParser.ExtractColumnListWithBrackets(keySelector.Body).Select(c => c + " ASC")) _orderByQueue.Enqueue(col);
         }
+
         public void OrderByDescending(Expression<Func<T, object>> keySelector)
         {
             if (keySelector == null) throw new ArgumentNullException("keySelector");
             foreach (var col in _expressionParser.ExtractColumnListWithBrackets(keySelector.Body).Select(c => c + " DESC")) _orderByQueue.Enqueue(col);
         }
+
         public void Paging(int pageSize, int pageNumber = 1)
         {
             if (pageSize <= 0) throw new ArgumentException("Page size must be greater than zero");
@@ -1189,11 +1036,13 @@ namespace EasyDapper
                 _offset = (pageNumber - 1) * pageSize;
             }
         }
+
         public void Sum(Expression<Func<T, object>> column, string alias = null) => AddAggregate("SUM", column.Body, alias);
         public void Avg(Expression<Func<T, object>> column, string alias = null) => AddAggregate("AVG", column.Body, alias);
         public void Min(Expression<Func<T, object>> column, string alias = null) => AddAggregate("MIN", column.Body, alias);
         public void Max(Expression<Func<T, object>> column, string alias = null) => AddAggregate("MAX", column.Body, alias);
         public void Count(Expression<Func<T, object>> column, string alias = null) => AddAggregate("COUNT", column.Body, alias);
+
         private void AddAggregate(string fn, Expression expr, string alias)
         {
             if (expr == null) throw new ArgumentNullException("expr");
@@ -1202,16 +1051,19 @@ namespace EasyDapper
             var agg = string.IsNullOrEmpty(alias) ? fn + "(" + parsed + ")" : fn + "(" + parsed + ") AS " + QuoteIdentifier(alias);
             _aggregateColumns.Enqueue(agg);
         }
+
         public void GroupBy(params Expression<Func<T, object>>[] groupByColumns)
         {
             if (groupByColumns == null) return;
             foreach (var column in groupByColumns) if (column != null) _groupByColumns.Enqueue(_expressionParser.ParseMemberWithBrackets(column.Body));
         }
+
         public void Having(Expression<Func<T, bool>> havingCondition)
         {
             if (havingCondition == null) throw new ArgumentNullException("havingCondition");
             _havingClause = _expressionParser.ParseExpressionWithBrackets(havingCondition.Body);
         }
+
         public void Row_Number(Expression<Func<T, object>> partitionBy, Expression<Func<T, object>> orderBy, string alias = "RowNumber")
         {
             if (partitionBy == null) throw new ArgumentNullException("partitionBy");
@@ -1221,17 +1073,19 @@ namespace EasyDapper
             var orders = _expressionParser.ExtractColumnListWithBrackets(orderBy.Body);
             _rowNumberClause = "ROW_NUMBER() OVER (PARTITION BY " + string.Join(", ", parts) + " ORDER BY " + string.Join(", ", orders) + ") AS " + QuoteIdentifier(alias);
         }
+
         public void InnerJoin<TLeft, TRight>(Expression<Func<TLeft, TRight, bool>> onCondition) => AddJoin("INNER JOIN", onCondition);
         public void LeftJoin<TLeft, TRight>(Expression<Func<TLeft, TRight, bool>> onCondition) => AddJoin("LEFT JOIN", onCondition);
         public void RightJoin<TLeft, TRight>(Expression<Func<TLeft, TRight, bool>> onCondition) => AddJoin("RIGHT JOIN", onCondition);
         public void FullJoin<TLeft, TRight>(Expression<Func<TLeft, TRight, bool>> onCondition) => AddJoin("FULL JOIN", onCondition);
         public void CustomJoin<TLeft, TRight>(string join, Expression<Func<TLeft, TRight, bool>> onCondition) => AddJoin(join, onCondition);
+
         private void AddJoin<TLeft, TRight>(string joinType, Expression<Func<TLeft, TRight, bool>> onCondition)
         {
             if (string.IsNullOrWhiteSpace(joinType)) throw new ArgumentNullException("joinType");
             if (onCondition == null) throw new ArgumentNullException("onCondition");
-            var leftTableName = GetTableName(typeof(TLeft));
-            var rightTableName = GetTableName(typeof(TRight));
+            var leftTableName = QueryBuilderCache.GetTableName(typeof(TLeft));
+            var rightTableName = QueryBuilderCache.GetTableName(typeof(TRight));
             var leftAlias = _aliasManager.GetAliasForType(typeof(TLeft));
             string rightAlias;
             bool isSelfJoin = typeof(TLeft) == typeof(TRight);
@@ -1243,8 +1097,10 @@ namespace EasyDapper
             var parsed = _expressionParser.ParseExpressionWithParameterMappingAndBrackets(onCondition.Body, parameterAliases);
             _joins.Enqueue(new JoinInfo { JoinType = joinType, TableName = rightTableName, Alias = rightAlias, OnCondition = parsed });
         }
+
         public void CrossApply<TSubQuery>(Expression<Func<T, TSubQuery, bool>> onCondition, Func<IQueryBuilder<TSubQuery>, IQueryBuilder<TSubQuery>> subBuilder) => AddApply("CROSS APPLY", onCondition, subBuilder);
         public void OuterApply<TSubQuery>(Expression<Func<T, TSubQuery, bool>> onCondition, Func<IQueryBuilder<TSubQuery>, IQueryBuilder<TSubQuery>> subBuilder) => AddApply("OUTER APPLY", onCondition, subBuilder);
+
         private void AddApply<TSubQuery>(string applyType, Expression<Func<T, TSubQuery, bool>> onCondition, Func<IQueryBuilder<TSubQuery>, IQueryBuilder<TSubQuery>> subBuilder)
         {
             if (string.IsNullOrWhiteSpace(applyType)) throw new ArgumentNullException("applyType");
@@ -1257,9 +1113,21 @@ namespace EasyDapper
             var subAliasManager = subQb.GetAliasManager();
             var subParameterBuilder = subQb.GetParameterBuilder();
             string subSql = subQb.BuildQuery();
-            string subMainAlias = subAliasManager.GetAliasForType(typeof(TSubQuery));
-            var parameterAliases = new Dictionary<ParameterExpression, string> { { onCondition.Parameters[0], _aliasManager.GetAliasForType(typeof(T)) }, { onCondition.Parameters[1], subMainAlias } };
+            string actualSubAlias = ExtractSubQueryTableAlias(subSql);
+            if (string.IsNullOrEmpty(actualSubAlias))
+            {
+
+                var subTableName = QueryBuilderCache.GetTableName(typeof(TSubQuery));
+                actualSubAlias = subAliasManager.GetAliasForTable(subTableName);
+            }
+
+            var parameterAliases = new Dictionary<ParameterExpression, string> {
+                { onCondition.Parameters[0], _aliasManager.GetAliasForType(typeof(T)) },
+                { onCondition.Parameters[1], actualSubAlias }
+            };
+
             var onSql = _expressionParser.ParseExpressionWithParameterMappingAndBrackets(onCondition.Body, parameterAliases);
+
             if (subSql.Contains("WHERE "))
             {
                 int whereIndex = subSql.IndexOf("WHERE ", StringComparison.OrdinalIgnoreCase);
@@ -1271,16 +1139,25 @@ namespace EasyDapper
                 int insertIndex = FindWhereInsertPosition(subSql);
                 subSql = subSql.Insert(insertIndex, " WHERE " + onSql);
             }
+
             var renamings = _parameterBuilder.MergeParameters(subParameterBuilder.GetParameters());
-            foreach (var renaming in renamings) subSql = subSql.Replace(renaming.Key, renaming.Value);
-            var applyAlias = _aliasManager.GenerateSubQueryAlias(GetTableName(typeof(TSubQuery)));
+            foreach (var renaming in renamings) subSql = SafeReplaceParameter(subSql, renaming.Key, renaming.Value);
+
+            var applyAlias = _aliasManager.GenerateSubQueryAlias(QueryBuilderCache.GetTableName(typeof(TSubQuery)));
             _aliasManager.SetSubQueryAlias(typeof(TSubQuery), applyAlias);
             _applies.Enqueue(new ApplyInfo { ApplyType = applyType, SubQuery = "(" + subSql + ") AS " + QuoteIdentifier(applyAlias), SubQueryAlias = applyAlias });
         }
+        private string ExtractSubQueryTableAlias(string sql)
+        {
+            var match = Regex.Match(sql, @"FROM\s+(?:\[[^\]]+\]\.)?\[[^\]]+\]\s+AS\s+\[([A-Za-z0-9_]+)\]", RegexOptions.IgnoreCase | RegexOptions.Multiline);
+            return match.Success ? match.Groups[1].Value : null;
+        }
+
         public void Union(IQueryBuilder<T> other) => AddSet("UNION", other);
         public void UnionAll(IQueryBuilder<T> other) => AddSet("UNION ALL", other);
         public void Intersect(IQueryBuilder<T> other) => AddSet("INTERSECT", other);
         public void Except(IQueryBuilder<T> other) => AddSet("EXCEPT", other);
+
         private void AddSet(string op, IQueryBuilder<T> other)
         {
             if (string.IsNullOrWhiteSpace(op)) throw new ArgumentNullException("op");
@@ -1289,29 +1166,31 @@ namespace EasyDapper
             string sql = otherQb.BuildQuery();
             var sourceParameters = otherQb.GetParameterBuilder().GetParameters();
             var renamings = _parameterBuilder.MergeParameters(sourceParameters);
-            foreach (var renaming in renamings) sql = sql.Replace(renaming.Key, renaming.Value);
+            foreach (var renaming in renamings) sql = SafeReplaceParameter(sql, renaming.Key, renaming.Value);
+
             var clause = op + " (" + sql + ")";
             if (op.StartsWith("UNION")) _unionClauses.Enqueue(clause);
             else if (op == "INTERSECT") _intersectClauses.Enqueue(clause);
             else if (op == "EXCEPT") _exceptClauses.Enqueue(clause);
         }
+
         public IEnumerable<T> Execute() => GetOpenConnection().Query<T>(BuildQuery(), _parameterBuilder.GetParameters(), commandTimeout: _timeOut);
         public IEnumerable<TResult> Execute<TResult>() => GetOpenConnection().Query<TResult>(BuildQuery(), _parameterBuilder.GetParameters(), commandTimeout: _timeOut);
+
         public async Task<IEnumerable<T>> ExecuteAsync()
         {
             var query = BuildQuery();
-            await _connectionSemaphore.WaitAsync();
-            try { return await GetOpenConnection().QueryAsync<T>(query, _parameterBuilder.GetParameters(), commandTimeout: _timeOut); }
-            finally { _connectionSemaphore.Release(); }
+            return await GetOpenConnection().QueryAsync<T>(query, _parameterBuilder.GetParameters(), commandTimeout: _timeOut);
         }
+
         public async Task<IEnumerable<TResult>> ExecuteAsync<TResult>()
         {
             var query = BuildQuery();
-            await _connectionSemaphore.WaitAsync();
-            try { return await GetOpenConnection().QueryAsync<TResult>(query, _parameterBuilder.GetParameters(), commandTimeout: _timeOut); }
-            finally { _connectionSemaphore.Release(); }
+            return await GetOpenConnection().QueryAsync<TResult>(query, _parameterBuilder.GetParameters(), commandTimeout: _timeOut);
         }
+
         public string GetRawSql() => BuildQuery();
+
         internal string BuildQuery()
         {
             ValidateAggregates();
@@ -1336,10 +1215,12 @@ namespace EasyDapper
             foreach (var e in _exceptClauses) sb.Append(' ').Append(e);
             return sb.ToString();
         }
+
         private void ValidateAggregates()
         {
             if (_aggregateColumns.Any() && !_groupByColumns.Any() && _selectedColumnsQueue.Any()) throw new InvalidOperationException("When using aggregate functions, either use GROUP BY or avoid selecting non-aggregate columns.");
         }
+
         private string BuildSelectClause()
         {
             string columns;
@@ -1350,7 +1231,7 @@ namespace EasyDapper
                 if (_aggregateColumns.Any()) columns = string.Join(", ", _aggregateColumns.ToArray()) + ", " + columns;
             }
             else if (_aggregateColumns.Any()) columns = string.Join(", ", _aggregateColumns.ToArray());
-            else columns = string.Join(", ", typeof(T).GetProperties().Select(p => _aliasManager.GetAliasForType(typeof(T)) + ".[" + GetColumnName(p) + "] AS " + QuoteIdentifier(p.Name)));
+            else columns = string.Join(", ", typeof(T).GetProperties().Select(p => _aliasManager.GetAliasForType(typeof(T)) + ".[" + QueryBuilderCache.GetColumnName(p) + "] AS " + QuoteIdentifier(p.Name)));
             if (!string.IsNullOrEmpty(_rowNumberClause)) columns = _rowNumberClause + ", " + columns;
             var result = new StringBuilder("SELECT");
             if (!string.IsNullOrEmpty(_distinctClause)) result.Append(' ').Append(_distinctClause);
@@ -1358,28 +1239,33 @@ namespace EasyDapper
             result.Append(' ').Append(columns);
             return result.ToString();
         }
+
         private string BuildFromClause()
         {
-            var tableName = GetTableName(typeof(T));
+            var tableName = QueryBuilderCache.GetTableName(typeof(T));
             var alias = _aliasManager.GetAliasForTable(tableName);
             return " FROM " + tableName + " AS " + QuoteIdentifier(alias);
         }
+
         private string BuildJoinClauses()
         {
             var sb = new StringBuilder();
             foreach (var join in _joins) sb.Append(' ').Append(join.JoinType).Append(' ').Append(join.TableName + " AS " + QuoteIdentifier(join.Alias)).Append(" ON ").Append(join.OnCondition);
             return sb.ToString();
         }
+
         private string BuildApplyClauses()
         {
             var sb = new StringBuilder();
             foreach (var apply in _applies) sb.Append(' ').Append(apply.ApplyType).Append(' ').Append(apply.SubQuery);
             return sb.ToString();
         }
+
         private string BuildWhereClause() => _filters.Any() ? "WHERE " + string.Join(" AND ", _filters.ToArray()) : string.Empty;
         private string BuildGroupByClause() => _groupByColumns.Any() ? "GROUP BY " + string.Join(", ", _groupByColumns.ToArray()) : string.Empty;
         private string BuildHavingClause() => !string.IsNullOrEmpty(_havingClause) ? "HAVING " + _havingClause : string.Empty;
         private string BuildOrderByClause() => _orderByQueue.Any() ? "ORDER BY " + string.Join(", ", _orderByQueue.ToArray()) : string.Empty;
+
         private string BuildPaginationClause(string orderByClause)
         {
             int? limit, offset;
@@ -1391,100 +1277,68 @@ namespace EasyDapper
             }
             return string.Empty;
         }
+
         private int FindWhereInsertPosition(string sql)
         {
             const string FROM = "FROM ";
-            const string WHERE = " WHERE ";
             const string GROUP_BY = " GROUP BY ";
             const string ORDER_BY = " ORDER BY ";
             const string HAVING = " HAVING ";
-            const string JOIN = " JOIN ";
-            const string INNER_JOIN = " INNER JOIN ";
-            const string LEFT_JOIN = " LEFT JOIN ";
-            const string RIGHT_JOIN = " RIGHT JOIN ";
-            const string FULL_JOIN = " FULL JOIN ";
-            const string CROSS_JOIN = " CROSS JOIN ";
-            const string ON = "ON ";
+
             int fromIndex = sql.IndexOf(FROM, StringComparison.OrdinalIgnoreCase);
             if (fromIndex == -1) return 0;
-            int currentPos = fromIndex;
-            while (true)
-            {
-                int nextWhere = sql.IndexOf(WHERE, currentPos, StringComparison.OrdinalIgnoreCase);
-                int nextGroupBy = sql.IndexOf(GROUP_BY, currentPos, StringComparison.OrdinalIgnoreCase);
-                int nextOrderBy = sql.IndexOf(ORDER_BY, currentPos, StringComparison.OrdinalIgnoreCase);
-                int nextHaving = sql.IndexOf(HAVING, currentPos, StringComparison.OrdinalIgnoreCase);
-                int nextJoin = sql.IndexOf(JOIN, currentPos, StringComparison.OrdinalIgnoreCase);
-                int nextInnerJoin = sql.IndexOf(INNER_JOIN, currentPos, StringComparison.OrdinalIgnoreCase);
-                int nextLeftJoin = sql.IndexOf(LEFT_JOIN, currentPos, StringComparison.OrdinalIgnoreCase);
-                int nextRightJoin = sql.IndexOf(RIGHT_JOIN, currentPos, StringComparison.OrdinalIgnoreCase);
-                int nextFullJoin = sql.IndexOf(FULL_JOIN, currentPos, StringComparison.OrdinalIgnoreCase);
-                int nextCrossJoin = sql.IndexOf(CROSS_JOIN, currentPos, StringComparison.OrdinalIgnoreCase);
-                int[] positions = { nextWhere, nextGroupBy, nextOrderBy, nextHaving, nextJoin, nextInnerJoin, nextLeftJoin, nextRightJoin, nextFullJoin, nextCrossJoin };
-                int minPos = positions.Where(p => p != -1).DefaultIfEmpty(sql.Length).Min();
-                if (minPos == sql.Length) return sql.Length;
-                if (minPos == nextJoin || minPos == nextInnerJoin || minPos == nextLeftJoin || minPos == nextRightJoin || minPos == nextFullJoin || minPos == nextCrossJoin)
-                {
-                    int onIndex = sql.IndexOf(ON, minPos, StringComparison.OrdinalIgnoreCase);
-                    if (onIndex != -1)
-                    {
-                        int onEnd = FindNextClausePosition(sql, onIndex + 3);
-                        if (onEnd == -1) currentPos = sql.Length;
-                        else currentPos = onEnd;
-                        continue;
-                    }
-                    else { currentPos = minPos + 4; continue; }
-                }
-                else { return minPos; }
-            }
+
+            int searchStart = fromIndex + FROM.Length;
+
+            int idxGroupBy = sql.IndexOf(GROUP_BY, searchStart, StringComparison.OrdinalIgnoreCase);
+            int idxOrderBy = sql.IndexOf(ORDER_BY, searchStart, StringComparison.OrdinalIgnoreCase);
+            int idxHaving = sql.IndexOf(HAVING, searchStart, StringComparison.OrdinalIgnoreCase);
+
+            int minTerminator = -1;
+            if (idxGroupBy != -1) minTerminator = idxGroupBy;
+            if (idxOrderBy != -1) minTerminator = (minTerminator == -1) ? idxOrderBy : Math.Min(minTerminator, idxOrderBy);
+            if (idxHaving != -1) minTerminator = (minTerminator == -1) ? idxHaving : Math.Min(minTerminator, idxHaving);
+
+            return minTerminator != -1 ? minTerminator : sql.Length;
         }
-        private int FindNextClausePosition(string sql, int startIndex)
-        {
-            const string GROUP_BY = "GROUP BY ";
-            const string ORDER_BY = "ORDER BY ";
-            const string HAVING = "HAVING ";
-            int[] positions = { sql.IndexOf(GROUP_BY, startIndex, StringComparison.OrdinalIgnoreCase), sql.IndexOf(ORDER_BY, startIndex, StringComparison.OrdinalIgnoreCase), sql.IndexOf(HAVING, startIndex, StringComparison.OrdinalIgnoreCase) };
-            return positions.Where(p => p >= startIndex).DefaultIfEmpty(-1).Min();
-        }
+
         private void SetClause(ref string clauseField, string value) { clauseField = value; }
         private void SetFlag(ref bool flagField, bool value) { flagField = value; }
-        private string GetTableName(Type type)
+
+        private string SafeReplaceParameter(string sql, string oldName, string newName)
         {
-            if (type == null) throw new ArgumentNullException("type");
-            var tableAttr = type.GetCustomAttribute<TableAttribute>();
-            var schema = tableAttr != null && !string.IsNullOrWhiteSpace(tableAttr.Schema) ? "[" + tableAttr.Schema + "]" : "[dbo]";
-            var name = tableAttr != null && !string.IsNullOrWhiteSpace(tableAttr.TableName) ? "[" + tableAttr.TableName + "]" : "[" + type.Name + "]";
-            return schema + "." + name;
+            return Regex.Replace(sql, @"\b" + Regex.Escape(oldName) + @"\b", newName, RegexOptions.IgnoreCase);
         }
-        private string GetColumnName(PropertyInfo property)
-        {
-            if (property == null) throw new ArgumentNullException("property", "PropertyInfo cannot be null");
-            var column = property.GetCustomAttribute<ColumnAttribute>();
-            return column != null && !string.IsNullOrWhiteSpace(column.ColumnName) ? column.ColumnName : property.Name;
-        }
+
         private IDbConnection GetOpenConnection()
         {
             var connection = _lazyConnection.Value;
             if (connection.State != ConnectionState.Open) connection.Open();
             return connection;
         }
+
         public void Dispose()
         {
             Dispose(true);
             GC.SuppressFinalize(this);
         }
+
         private void Dispose(bool disposing)
         {
             if (_disposed) return;
             if (disposing)
             {
-                if (_lazyConnection.IsValueCreated && _lazyConnection.Value.State != ConnectionState.Closed) _lazyConnection.Value.Close();
+                if (_ownsConnection && _lazyConnection.IsValueCreated && _lazyConnection.Value.State != ConnectionState.Closed)
+                    _lazyConnection.Value.Close();
             }
             _disposed = true;
         }
+
         ~QueryBuilderCore() { Dispose(false); }
+
         private sealed class JoinInfo { public string JoinType { get; set; } public string TableName { get; set; } public string Alias { get; set; } public string OnCondition { get; set; } }
         private sealed class ApplyInfo { public string ApplyType { get; set; } public string SubQuery { get; set; } public string SubQueryAlias { get; set; } }
+
         internal AliasManager GetAliasManager() => _aliasManager;
         internal ParameterBuilder GetParameterBuilder() => _parameterBuilder;
     }
@@ -1496,6 +1350,7 @@ namespace EasyDapper
         private readonly ExpressionParser _expressionParser;
         private bool _disposed = false;
         private static readonly char[] InvalidAliasChars = new[] { ']', ';', '-', '-', '/', '*', '\'', '"' };
+
         private static void ValidateCustomAlias(string alias)
         {
             if (!string.IsNullOrEmpty(alias) && alias.IndexOfAny(InvalidAliasChars) >= 0)
@@ -1503,14 +1358,16 @@ namespace EasyDapper
                 throw new ArgumentException("Custom alias contains invalid characters.", "alias");
             }
         }
+
         internal QueryBuilder(IDbConnection connection)
         {
             if (connection == null) throw new ArgumentNullException("connection", "Connection cannot be null.");
             _aliasManager = new AliasManager();
             _parameterBuilder = new ParameterBuilder();
             _expressionParser = new ExpressionParser(_aliasManager, _parameterBuilder);
-            _core = new QueryBuilderCore<T>(connection, _aliasManager, _parameterBuilder, _expressionParser);
+            _core = new QueryBuilderCore<T>(connection, _aliasManager, _parameterBuilder, _expressionParser, ownsConnection: false);
         }
+
         public IQueryBuilder<T> WithTableAlias(string tableName, string customAlias)
         {
             if (string.IsNullOrEmpty(tableName) || string.IsNullOrEmpty(customAlias)) throw new ArgumentNullException("Table name and alias cannot be null or empty.");
@@ -1518,14 +1375,17 @@ namespace EasyDapper
             _aliasManager.SetTableAlias(tableName, customAlias);
             return this;
         }
+
         public IQueryBuilder<T> WithTableAlias(Type tableType, string customAlias)
         {
             if (tableType == null) throw new ArgumentNullException("tableType");
             if (string.IsNullOrEmpty(customAlias)) throw new ArgumentNullException("customAlias");
-            var tableName = GetTableName(tableType);
+            var tableName = QueryBuilderCache.GetTableName(tableType);
             return WithTableAlias(tableName, customAlias);
         }
+
         public IQueryBuilder<T> WithTableAlias<TTable>(string customAlias) => WithTableAlias(typeof(TTable), customAlias);
+
         public IQueryBuilder<T> Where(Expression<Func<T, bool>> filter) { _core.Where(filter); return this; }
         public IQueryBuilder<T> Select(params Expression<Func<T, object>>[] columns) { _core.Select(columns); return this; }
         public IQueryBuilder<T> Select<TSource>(params Expression<Func<TSource, object>>[] columns) { _core.Select<TSource>(columns); return this; }
@@ -1563,21 +1423,15 @@ namespace EasyDapper
         public Task<IEnumerable<TResult>> ExecuteAsync<TResult>() => _core.ExecuteAsync<TResult>();
         public string GetRawSql() => _core.GetRawSql();
         public string BuildQuery() => _core.BuildQuery();
+
         internal AliasManager GetAliasManager() => _aliasManager;
         internal ParameterBuilder GetParameterBuilder() => _parameterBuilder;
+
         public void Dispose()
         {
             if (_disposed) return;
             _disposed = true;
             _core.Dispose();
-        }
-        private string GetTableName(Type type)
-        {
-            if (type == null) throw new ArgumentNullException("type");
-            var tableAttr = type.GetCustomAttribute<TableAttribute>();
-            var schema = tableAttr != null && !string.IsNullOrWhiteSpace(tableAttr.Schema) ? "[" + tableAttr.Schema + "]" : "[dbo]";
-            var name = tableAttr != null && !string.IsNullOrWhiteSpace(tableAttr.TableName) ? "[" + tableAttr.TableName + "]" : "[" + type.Name + "]";
-            return schema + "." + name;
         }
     }
 }
