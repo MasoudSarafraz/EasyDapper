@@ -93,12 +93,12 @@ namespace EasyDapper
                         _parameterBuilder.AddParameter(globalName, value);
                         sql = SafeReplaceParameter(sql, localName, globalName);
                     }
+                    return sql;
                 }
                 else
                 {
-                    throw new InvalidOperationException("Template parameter count mismatch.");
+                    return ParseMainLogic(expression, useBrackets, parameterAliases, _parameterBuilder);
                 }
-                return sql;
             }
             else
             {
@@ -144,6 +144,7 @@ namespace EasyDapper
                 default: throw new NotSupportedException("Expression type '" + expression.NodeType + "' is not supported");
             }
         }
+
         private string HandleEqual(BinaryExpression expression, Dictionary<ParameterExpression, string> parameterAliases, ParameterBuilder paramBuilder)
         {
             if (expression == null) throw new ArgumentNullException("expression");
@@ -232,6 +233,7 @@ namespace EasyDapper
             if (IsNullConstant(expression.Right)) return ParseMemberWithBrackets(expression.Left, parameterAliases) + " IS NOT NULL";
             return HandleBinaryWithBrackets(expression, "<>", parameterAliases, paramBuilder);
         }
+
         private string HandleBinary(BinaryExpression expression, string op, Dictionary<ParameterExpression, string> parameterAliases, ParameterBuilder paramBuilder)
         {
             if (expression == null) throw new ArgumentNullException("expression");
@@ -373,6 +375,205 @@ namespace EasyDapper
             var paramExpr = expression;
             if (parameterAliases != null && parameterAliases.TryGetValue(paramExpr, out var alias)) return alias;
             return _aliasManager.GetAliasForType(paramExpr.Type);
+        }
+
+        private string ParseValue(Expression expression, ParameterBuilder paramBuilder, string format = null, Dictionary<ParameterExpression, string> parameterAliases = null)
+        {
+            if (expression == null) throw new ArgumentNullException("expression");
+            var constant = expression as ConstantExpression;
+            if (constant != null)
+            {
+                var p = paramBuilder.GetUniqueParameterName();
+                var v = constant.Value;
+                if (format != null && v is string) v = string.Format(format, v);
+                paramBuilder.AddParameter(p, v);
+                return p;
+            }
+            var member = expression as MemberExpression;
+            if (member != null)
+            {
+                var root = GetRootExpression(member);
+                if (root.NodeType == ExpressionType.Parameter)
+                {
+                    return ParseMember(expression, parameterAliases);
+                }
+                if (root.NodeType == ExpressionType.Constant)
+                {
+                    var value = Evaluate(expression);
+                    if (format != null && value is string) value = string.Format(format, value);
+
+                    var p = paramBuilder.GetUniqueParameterName();
+                    paramBuilder.AddParameter(p, value);
+                    return p;
+                }
+                var eval = Evaluate(expression);
+                var p2 = paramBuilder.GetUniqueParameterName();
+                if (format != null && eval is string) eval = string.Format(format, eval);
+                paramBuilder.AddParameter(p2, eval);
+                return p2;
+            }
+
+            var unary = expression as UnaryExpression;
+            if (unary != null) return ParseValue(unary.Operand, paramBuilder, format, parameterAliases);
+
+            var binary = expression as BinaryExpression;
+            if (binary != null)
+            {
+                var left = ParseValue(binary.Left, paramBuilder, format, parameterAliases);
+                var right = ParseValue(binary.Right, paramBuilder, format, parameterAliases);
+                return left + " " + GetOperator(binary.NodeType) + " " + right;
+            }
+            var evalFallback = Evaluate(expression);
+            var p3 = paramBuilder.GetUniqueParameterName();
+            paramBuilder.AddParameter(p3, evalFallback);
+            return p3;
+        }
+
+        private Expression GetRootExpression(Expression exp)
+        {
+            if (exp == null) return null;
+            while (exp is MemberExpression member && member.Expression != null)
+            {
+                exp = member.Expression;
+            }
+            return exp;
+        }
+
+        private static object Evaluate(Expression expr)
+        {
+            if (expr == null) return null;
+            if (expr is ConstantExpression ce) return ce.Value;
+            try
+            {
+                var lambda = Expression.Lambda(expr);
+                var compiled = lambda.Compile();
+                return compiled.DynamicInvoke();
+            }
+            catch
+            {
+                return null;
+            }
+        }
+
+        private static object GetValue(MemberExpression member)
+        {
+            if (member == null) throw new ArgumentNullException("member");
+            var obj = ((ConstantExpression)member.Expression).Value;
+            var fi = member.Member as FieldInfo;
+            if (fi != null) return fi.GetValue(obj);
+            var pi = member.Member as PropertyInfo;
+            if (pi != null) return pi.GetValue(obj, null);
+            return null;
+        }
+
+        private static string GetOperator(ExpressionType nodeType)
+        {
+            switch (nodeType)
+            {
+                case ExpressionType.Equal: return "=";
+                case ExpressionType.NotEqual: return "<>";
+                case ExpressionType.GreaterThan: return ">";
+                case ExpressionType.LessThan: return "<";
+                case ExpressionType.GreaterThanOrEqual: return ">=";
+                case ExpressionType.LessThanOrEqual: return "<=";
+                case ExpressionType.AndAlso: return "AND";
+                case ExpressionType.OrElse: return "OR";
+                default: throw new NotSupportedException("Unsupported operator: " + nodeType);
+            }
+        }
+
+        private bool IsNullConstant(Expression expression)
+        {
+            if (expression == null) return false;
+            var c = expression as ConstantExpression;
+            return c != null && c.Value == null;
+        }
+
+        private string SafeReplaceParameter(string sql, string oldName, string newName)
+        {
+            return Regex.Replace(sql, @"\b" + Regex.Escape(oldName) + @"\b", newName, RegexOptions.IgnoreCase);
+        }
+
+        private int CalculateTemplateHash(Expression expression, bool useBrackets, Dictionary<ParameterExpression, string> parameterAliases)
+        {
+            if (expression == null) return 0;
+            unchecked
+            {
+                int hash = expression.NodeType.GetHashCode();
+                hash = (hash * 397) ^ useBrackets.GetHashCode();
+                hash = (hash * 397) ^ expression.Type.GetHashCode();
+
+                if (expression is MemberExpression m)
+                {
+                    hash = (hash * 397) ^ m.Member.Name.GetHashCode();
+                    if (m.Expression != null) hash = (hash * 397) ^ CalculateTemplateHash(m.Expression, false, null);
+                }
+                else if (expression is MethodCallExpression mc)
+                {
+                    hash = (hash * 397) ^ mc.Method.Name.GetHashCode();
+                    if (mc.Object != null) hash = (hash * 397) ^ CalculateTemplateHash(mc.Object, false, null);
+                    foreach (var arg in mc.Arguments) hash = (hash * 397) ^ CalculateTemplateHash(arg, false, null);
+                }
+                else if (expression is BinaryExpression b)
+                {
+                    hash = (hash * 397) ^ CalculateTemplateHash(b.Left, false, null);
+                    hash = (hash * 397) ^ CalculateTemplateHash(b.Right, false, null);
+                }
+                else if (expression is UnaryExpression u)
+                {
+                    hash = (hash * 397) ^ CalculateTemplateHash(u.Operand, false, null);
+                }
+                else if (expression is ParameterExpression p)
+                {
+                    if (parameterAliases != null && parameterAliases.TryGetValue(p, out var alias)) hash = (hash * 397) ^ alias.GetHashCode();
+                    else hash = (hash * 397) ^ p.Type.GetHashCode();
+                }
+
+                return hash;
+            }
+        }
+
+        private class ConstantExtractor : ExpressionVisitor
+        {
+            public readonly List<object> Constants = new List<object>();
+            private bool IsSimpleType(Type type)
+            {
+                return type.IsValueType || type.IsEnum || type == typeof(string) || type == typeof(decimal) || type == typeof(DateTime) || type == typeof(Guid) || type == typeof(byte[]);
+            }
+
+            protected override Expression VisitConstant(ConstantExpression node)
+            {
+                if (node.Value == null || IsSimpleType(node.Value.GetType()))
+                {
+                    Constants.Add(node.Value);
+                }
+                return base.VisitConstant(node);
+            }
+
+            protected override Expression VisitMember(MemberExpression node)
+            {
+                if (node.Expression != null && node.Expression.NodeType == ExpressionType.Constant)
+                {
+                    var obj = ((ConstantExpression)node.Expression).Value;
+                    if (obj != null)
+                    {
+                        var fi = node.Member as FieldInfo;
+                        var pi = node.Member as PropertyInfo;
+
+                        object val = null;
+                        if (fi != null) val = fi.GetValue(obj);
+                        else if (pi != null) val = pi.GetValue(obj, null);
+                        if (val != null && !IsSimpleType(val.GetType()))
+                        {
+                            return node;
+                        }
+
+                        Constants.Add(val);
+                        return node;
+                    }
+                }
+                return base.VisitMember(node);
+            }
         }
 
         public string ParseSelectMember(Expression expression)
@@ -537,174 +738,6 @@ namespace EasyDapper
             if (member.Expression is MemberExpression nestedMember) return GetTableAliasForMember(nestedMember, parameterAliases);
             if (member.Expression != null) return ParseMemberWithBrackets(member.Expression, parameterAliases);
             return null;
-        }
-
-        private string ParseValue(Expression expression, ParameterBuilder paramBuilder, string format = null, Dictionary<ParameterExpression, string> parameterAliases = null)
-        {
-            if (expression == null) throw new ArgumentNullException("expression");
-            var constant = expression as ConstantExpression;
-            if (constant != null)
-            {
-                var p = paramBuilder.GetUniqueParameterName();
-                var v = constant.Value;
-                if (format != null && v is string) v = string.Format(format, v);
-                paramBuilder.AddParameter(p, v);
-                return p;
-            }
-            var member = expression as MemberExpression;
-            if (member != null)
-            {
-                if (member.Expression != null && member.Expression.NodeType == ExpressionType.Constant)
-                {
-                    var value = GetValue(member);
-                    var p = paramBuilder.GetUniqueParameterName();
-                    paramBuilder.AddParameter(p, value);
-                    return p;
-                }
-                return ParseMember(member, parameterAliases);
-            }
-            var unary = expression as UnaryExpression;
-            if (unary != null) return ParseValue(unary.Operand, paramBuilder, format, parameterAliases);
-            var binary = expression as BinaryExpression;
-            if (binary != null)
-            {
-                var left = ParseValue(binary.Left, paramBuilder, format, parameterAliases);
-                var right = ParseValue(binary.Right, paramBuilder, format, parameterAliases);
-                return left + " " + GetOperator(binary.NodeType) + " " + right;
-            }
-            var eval = Evaluate(expression);
-            var p2 = paramBuilder.GetUniqueParameterName();
-            paramBuilder.AddParameter(p2, eval);
-            return p2;
-        }
-
-        private static object Evaluate(Expression expr)
-        {
-            if (expr == null) return null;
-            if (expr is ConstantExpression ce) return ce.Value;
-            try
-            {
-                var lambda = Expression.Lambda(expr);
-                var compiled = lambda.Compile();
-                return compiled.DynamicInvoke();
-            }
-            catch
-            {
-                return null;
-            }
-        }
-
-        private static object GetValue(MemberExpression member)
-        {
-            if (member == null) throw new ArgumentNullException("member");
-            var obj = ((ConstantExpression)member.Expression).Value;
-            var fi = member.Member as FieldInfo;
-            if (fi != null) return fi.GetValue(obj);
-            var pi = member.Member as PropertyInfo;
-            if (pi != null) return pi.GetValue(obj, null);
-            return null;
-        }
-
-        private static string GetOperator(ExpressionType nodeType)
-        {
-            switch (nodeType)
-            {
-                case ExpressionType.Equal: return "=";
-                case ExpressionType.NotEqual: return "<>";
-                case ExpressionType.GreaterThan: return ">";
-                case ExpressionType.LessThan: return "<";
-                case ExpressionType.GreaterThanOrEqual: return ">=";
-                case ExpressionType.LessThanOrEqual: return "<=";
-                case ExpressionType.AndAlso: return "AND";
-                case ExpressionType.OrElse: return "OR";
-                default: throw new NotSupportedException("Unsupported operator: " + nodeType);
-            }
-        }
-
-        private bool IsNullConstant(Expression expression)
-        {
-            if (expression == null) return false;
-            var c = expression as ConstantExpression;
-            return c != null && c.Value == null;
-        }
-
-        private string SafeReplaceParameter(string sql, string oldName, string newName)
-        {
-            return Regex.Replace(sql, @"\b" + Regex.Escape(oldName) + @"\b", newName, RegexOptions.IgnoreCase);
-        }
-
-        private int CalculateTemplateHash(Expression expression, bool useBrackets, Dictionary<ParameterExpression, string> parameterAliases)
-        {
-            if (expression == null) return 0;
-            unchecked
-            {
-                int hash = expression.NodeType.GetHashCode();
-                hash = (hash * 397) ^ useBrackets.GetHashCode();
-                hash = (hash * 397) ^ expression.Type.GetHashCode();
-
-                if (expression is MemberExpression m)
-                {
-                    hash = (hash * 397) ^ m.Member.Name.GetHashCode();
-                    if (m.Expression != null) hash = (hash * 397) ^ CalculateTemplateHash(m.Expression, false, null);
-                }
-                else if (expression is MethodCallExpression mc)
-                {
-                    hash = (hash * 397) ^ mc.Method.Name.GetHashCode();
-                    if (mc.Object != null) hash = (hash * 397) ^ CalculateTemplateHash(mc.Object, false, null);
-                    foreach (var arg in mc.Arguments) hash = (hash * 397) ^ CalculateTemplateHash(arg, false, null);
-                }
-                else if (expression is BinaryExpression b)
-                {
-                    hash = (hash * 397) ^ CalculateTemplateHash(b.Left, false, null);
-                    hash = (hash * 397) ^ CalculateTemplateHash(b.Right, false, null);
-                }
-                else if (expression is UnaryExpression u)
-                {
-                    hash = (hash * 397) ^ CalculateTemplateHash(u.Operand, false, null);
-                }
-                else if (expression is ParameterExpression p)
-                {
-                    if (parameterAliases != null && parameterAliases.TryGetValue(p, out var alias)) hash = (hash * 397) ^ alias.GetHashCode();
-                    else hash = (hash * 397) ^ p.Type.GetHashCode();
-                }
-
-                return hash;
-            }
-        }
-
-        private class ConstantExtractor : ExpressionVisitor
-        {
-            public readonly List<object> Constants = new List<object>();
-
-            protected override Expression VisitConstant(ConstantExpression node)
-            {
-                if (node.Type.IsValueType || node.Type == typeof(string) || node.Type == typeof(DateTime))
-                {
-                    Constants.Add(node.Value);
-                }
-                return base.VisitConstant(node);
-            }
-
-            protected override Expression VisitMember(MemberExpression node)
-            {
-                if (node.Expression != null && node.Expression.NodeType == ExpressionType.Constant)
-                {
-                    var obj = ((ConstantExpression)node.Expression).Value;
-                    if (obj != null)
-                    {
-                        var fi = node.Member as FieldInfo;
-                        var pi = node.Member as PropertyInfo;
-
-                        object val = null;
-                        if (fi != null) val = fi.GetValue(obj);
-                        else if (pi != null) val = pi.GetValue(obj, null);
-
-                        Constants.Add(val);
-                        return node;
-                    }
-                }
-                return base.VisitMember(node);
-            }
         }
     }
 
