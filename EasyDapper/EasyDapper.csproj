@@ -3,17 +3,17 @@
 	<PropertyGroup>
 		<TargetFrameworks>net45;netstandard2.0</TargetFrameworks>
 		<PackageId>SQLDapper.Easy</PackageId>
-		<PackageVersion>4.5.0</PackageVersion>
+		<PackageVersion>4.7.0</PackageVersion>
 		<Authors>Masoud Sarafraz</Authors>
 		<Description>A professional Dapper library with CRUD, dynamic queries, stored procedures, attributes, thread-safety, and transaction support.</Description>
 		<Title>Easy to use Dapper</Title>
 		<RepositoryUrl>https://github.com/MasoudSarafraz/EasyDapper.git</RepositoryUrl>
 		<PackageProjectUrl>https://github.com/MasoudSarafraz/EasyDapper.git</PackageProjectUrl>
-		<AssemblyVersion>4.5.0.0</AssemblyVersion>
-		<FileVersion>4.5.0.0</FileVersion>
+		<AssemblyVersion>4.7.0.0</AssemblyVersion>
+		<FileVersion>4.7.0.0</FileVersion>
 		<GeneratePackageOnBuild>true</GeneratePackageOnBuild>
 		<PackageLicenseExpression>MIT</PackageLicenseExpression>
-		<Version>4.0.0</Version>
+		<Version>4.7.0</Version>
 		<PackageTags>dapper;sql;mssql</PackageTags>
 	</PropertyGroup>
 	<ItemGroup>
