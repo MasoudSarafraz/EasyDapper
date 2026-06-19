@@ -1,29 +1,34 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
 
-	<PropertyGroup>
-		<TargetFrameworks>net45;netstandard2.0</TargetFrameworks>
-		<PackageId>SQLDapper.Easy</PackageId>
-		<PackageVersion>4.7.0</PackageVersion>
-		<Authors>Masoud Sarafraz</Authors>
-		<Description>A professional Dapper library with CRUD, dynamic queries, stored procedures, attributes, thread-safety, and transaction support.</Description>
-		<Title>Easy to use Dapper</Title>
-		<RepositoryUrl>https://github.com/MasoudSarafraz/EasyDapper.git</RepositoryUrl>
-		<PackageProjectUrl>https://github.com/MasoudSarafraz/EasyDapper.git</PackageProjectUrl>
-		<AssemblyVersion>4.7.0.0</AssemblyVersion>
-		<FileVersion>4.7.0.0</FileVersion>
-		<GeneratePackageOnBuild>true</GeneratePackageOnBuild>
-		<PackageLicenseExpression>MIT</PackageLicenseExpression>
-		<Version>4.7.0</Version>
-		<PackageTags>dapper;sql;mssql</PackageTags>
-	</PropertyGroup>
-	<ItemGroup>
-		<PackageReference Include="Dapper" Version="1.50.2" />
-	</ItemGroup>
-	<ItemGroup Condition="'$(TargetFramework)' == 'net45'">
-		<Reference Include="System.Data" />
-	</ItemGroup>
-	<ItemGroup Condition="'$(TargetFramework)' == 'netstandard2.0'">
-		<PackageReference Include="System.Data.SqlClient" Version="4.8.5" />
-	</ItemGroup>
+        <PropertyGroup>
+                <TargetFrameworks>net45;netstandard2.0</TargetFrameworks>
+                <PackageId>SQLDapper.Easy</PackageId>
+                <PackageVersion>4.8.0</PackageVersion>
+                <Authors>Masoud Sarafraz</Authors>
+                <Description>A professional Dapper library with CRUD, dynamic queries, stored procedures, attributes, thread-safety, and transaction support.</Description>
+                <Title>Easy to use Dapper</Title>
+                <RepositoryUrl>https://github.com/MasoudSarafraz/EasyDapper.git</RepositoryUrl>
+                <PackageProjectUrl>https://github.com/MasoudSarafraz/EasyDapper.git</PackageProjectUrl>
+                <AssemblyVersion>4.8.0.0</AssemblyVersion>
+                <FileVersion>4.8.0.0</FileVersion>
+                <GeneratePackageOnBuild>true</GeneratePackageOnBuild>
+                <PackageLicenseExpression>MIT</PackageLicenseExpression>
+                <Version>4.8.0</Version>
+                <PackageTags>dapper;sql;mssql</PackageTags>
+                <LangVersion>latest</LangVersion>
+        </PropertyGroup>
+        <ItemGroup>
+                <PackageReference Include="Dapper" Version="1.50.2" />
+        </ItemGroup>
+        <ItemGroup Condition="'$(TargetFramework)' == 'net45'">
+                <Reference Include="System.Data" />
+        </ItemGroup>
+        <ItemGroup Condition="'$(TargetFramework)' == 'netstandard2.0'">
+                <PackageReference Include="System.Data.SqlClient" Version="4.8.5" />
+        </ItemGroup>
+
+        <ItemGroup>
+                <InternalsVisibleTo Include="EasyDapper.Tests" />
+        </ItemGroup>
 
 </Project>

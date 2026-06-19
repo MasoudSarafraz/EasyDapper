@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Linq.Expressions;
 using System.Threading;
@@ -6,7 +6,13 @@ using System.Threading.Tasks;
 
 namespace EasyDapper
 {
-    public interface IQueryBuilder<T>
+    /// <summary>
+    /// A fluent, LINQ-style query builder for SQL Server. Instances are obtained via
+    /// <see cref="IDapperService.Query{T}"/> and are bound to the originating service's
+    /// connection and transaction.
+    /// </summary>
+    /// <typeparam name="T">The entity type that the FROM clause targets.</typeparam>
+    public interface IQueryBuilder<T> : IDisposable
     {
         IQueryBuilder<T> Where(Expression<Func<T, bool>> filter);
         IEnumerable<T> Execute();
@@ -42,10 +48,23 @@ namespace EasyDapper
         IQueryBuilder<T> UnionAll(IQueryBuilder<T> queryBuilder);
         IQueryBuilder<T> Intersect(IQueryBuilder<T> queryBuilder);
         IQueryBuilder<T> Except(IQueryBuilder<T> queryBuilder);
-        // Explicit Method for BuildQuery
-        // به دلیل اینکه کلاس اینترنال هستش متد های OuterApply و CrossApply به مشکل میخوردند . بنابراین
+
+        /// <summary>
+        /// Adds the SQL <c>DISTINCT</c> keyword to the SELECT clause. Has no effect on already-
+        /// rendered clauses added before this call.
+        /// </summary>
+        IQueryBuilder<T> Distinct();
+
+        /// <summary>
+        /// Renders the accumulated clauses to a SQL string. Useful for diagnostics and for
+        /// executing the query through other database helpers.
+        /// </summary>
         string BuildQuery();
+
+        /// <summary>
+        /// Equivalent to <see cref="BuildQuery"/>. Kept for backwards compatibility with callers
+        /// that learned the older name from earlier documentation.
+        /// </summary>
         string GetRawSql();
     }
-
 }

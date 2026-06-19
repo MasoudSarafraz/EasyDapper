@@ -5,6 +5,8 @@ VisualStudioVersion = 16.0.31911.196
 MinimumVisualStudioVersion = 10.0.40219.1
 Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "EasyDapper", "EasyDapper\EasyDapper.csproj", "{096C91C2-8715-4F17-B207-56CC753707E8}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "EasyDapper.Tests", "EasyDapper.Tests\EasyDapper.Tests.csproj", "{F559CE92-2EFE-4C76-AA67-B1D889B3503B}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -15,6 +17,10 @@ Global
 		{096C91C2-8715-4F17-B207-56CC753707E8}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{096C91C2-8715-4F17-B207-56CC753707E8}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{096C91C2-8715-4F17-B207-56CC753707E8}.Release|Any CPU.Build.0 = Release|Any CPU
+		{F559CE92-2EFE-4C76-AA67-B1D889B3503B}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{F559CE92-2EFE-4C76-AA67-B1D889B3503B}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{F559CE92-2EFE-4C76-AA67-B1D889B3503B}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{F559CE92-2EFE-4C76-AA67-B1D889B3503B}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
