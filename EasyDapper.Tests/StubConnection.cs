@@ -5,11 +5,6 @@ using System.Data;
 
 namespace EasyDapper.Tests
 {
-    /// <summary>
-    /// Minimal IDbConnection stub for tests that need to construct a QueryBuilder without
-    /// actually opening a database connection. Only the members that the QueryBuilder touches
-    /// at construction time are implemented; everything else throws NotSupportedException.
-    /// </summary>
     public sealed class StubConnection : IDbConnection
     {
         public string ConnectionString { get; set; }

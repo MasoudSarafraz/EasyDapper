@@ -6,13 +6,6 @@ using System.Threading.Tasks;
 
 namespace EasyDapper
 {
-    /// <summary>
-    /// Concrete implementation of <see cref="IQueryBuilder{T}"/>. Each instance owns its own
-    /// <see cref="AliasManager"/>, <see cref="ParameterBuilder"/> and <see cref="ExpressionParser"/>
-    /// so that builders can be composed (e.g. via UNION/INTERSECT) without alias or parameter
-    /// name collisions.
-    /// </summary>
-    /// <typeparam name="T">The entity type that the FROM clause targets.</typeparam>
     internal sealed class QueryBuilder<T> : IQueryBuilder<T>, IDisposable
     {
         private readonly QueryBuilderCore<T> _core;
@@ -21,11 +14,6 @@ namespace EasyDapper
         private readonly ExpressionParser _expressionParser;
         private bool _disposed = false;
 
-        /// <summary>
-        /// Creates a new builder bound to the supplied connection. Suitable for callers that
-        /// construct a QueryBuilder directly (i.e. without going through DapperService). The
-        /// resulting builder will NOT participate in any transaction.
-        /// </summary>
         internal QueryBuilder(IDbConnection connection)
         {
             if (connection == null) throw new ArgumentNullException("connection", "Connection cannot be null.");
@@ -36,23 +24,19 @@ namespace EasyDapper
                 ownsConnection: false);
         }
 
-        /// <summary>
-        /// Creates a new builder bound to the supplied connection manager. The builder will
-        /// participate in any transaction started on the manager and will use the manager's
-        /// configured command timeout.
-        /// </summary>
         internal QueryBuilder(ConnectionManager connectionManager, QueryCache queryCache)
         {
             if (connectionManager == null) throw new ArgumentNullException("connectionManager");
             _aliasManager = new AliasManager();
             _parameterBuilder = new ParameterBuilder();
             _expressionParser = new ExpressionParser(_aliasManager, _parameterBuilder);
-            // The QueryBuilderCore's constructor will call GetOpenConnection() lazily via the
-            // supplied ConnectionManager when Execute/ExecuteAsync is invoked, ensuring that
-            // the connection is opened in the same critical section as the rest of the service.
-            _core = new QueryBuilderCore<T>(connectionManager.GetOpenConnection(), _aliasManager,
-                _parameterBuilder, _expressionParser, ownsConnection: false,
-                connectionManager: connectionManager);
+            _core = new QueryBuilderCore<T>(connectionManager, _aliasManager,
+                _parameterBuilder, _expressionParser);
+        }
+
+        internal QueryBuilder(ConnectionManager connectionManager)
+            : this(connectionManager, null)
+        {
         }
 
         public IQueryBuilder<T> WithTableAlias(string tableName, string customAlias)

@@ -7,26 +7,6 @@ using System.Threading.Tasks;
 
 namespace EasyDapper
 {
-    /// <summary>
-    /// Manages the lifetime of a SQL Server connection and the active transaction.
-    /// Supports nested transactions via SQL Server SAVE TRANSACTION savepoints.
-    /// </summary>
-    /// <remarks>
-    /// <para>
-    /// The manager owns a single physical <see cref="IDbConnection"/> that is created lazily on
-    /// first use. When a transaction is started, all subsequent operations on the connection
-    /// participate in that transaction until <see cref="CommitTransaction"/> or
-    /// <see cref="RollbackTransaction"/> is called.
-    /// </para>
-    /// <para>
-    /// Nested calls to <see cref="BeginTransaction"/> do not start a new SQL Server transaction
-    /// (which is not supported on a single connection). Instead they create a named savepoint
-    /// using <c>SAVE TRANSACTION</c>. <see cref="CommitTransaction"/> simply pops the savepoint
-    /// (no SQL is executed), while <see cref="RollbackTransaction"/> issues
-    /// <c>ROLLBACK TRANSACTION &lt;savepoint-name&gt;</c> to undo only the work done since the
-    /// savepoint was created.
-    /// </para>
-    /// </remarks>
     internal class ConnectionManager : IDisposable
     {
         private readonly string _connectionString;
@@ -39,10 +19,6 @@ namespace EasyDapper
         private bool _disposed = false;
         private readonly object _lock = new object();
 
-        /// <summary>
-        /// Returns the current depth of nested transactions (0 when no transaction is active,
-        /// 1 for the outermost transaction, 2 for one level of savepoint, etc.).
-        /// </summary>
         public int TransactionCount
         {
             get
@@ -79,17 +55,10 @@ namespace EasyDapper
             _timeOut = GetExternalConnectionTimeout();
         }
 
-        /// <summary>
-        /// Reads the configured Connect Timeout from the connection string WITHOUT opening
-        /// a physical connection. Falls back to <see cref="DEFAULT_TIMEOUT"/> if the value
-        /// cannot be determined.
-        /// </summary>
         private int GetConnectionTimeout()
         {
             try
             {
-                // Use SqlConnectionStringBuilder to read Connect Timeout without
-                // opening a real connection (which is expensive and can block).
                 var builder = new SqlConnectionStringBuilder(_connectionString);
                 return builder.ConnectTimeout > 0 ? builder.ConnectTimeout : DEFAULT_TIMEOUT;
             }
@@ -118,7 +87,6 @@ namespace EasyDapper
 
         public async Task<IDbConnection> GetOpenConnectionAsync()
         {
-            // External connection: no lock needed (we never close external connections).
             if (_externalConnection != null) return _externalConnection;
 
             bool needOpen = false;
@@ -178,7 +146,7 @@ namespace EasyDapper
             lock (_lock)
             {
                 if (_transaction == null) throw new InvalidOperationException("No transaction is in progress");
-                // If we have savepoints, popping one means we commit only the work since that savepoint.
+
                 if (_savePointStack.TryPop(out var _)) return;
                 try { _transaction.Commit(); }
                 finally { CleanupTransaction(); }
@@ -221,7 +189,7 @@ namespace EasyDapper
                 _transaction = null;
                 _savePointStack.Clear();
             }
-            catch { /* Ignore cleanup errors */ }
+            catch {  }
         }
 
         public void Dispose()
@@ -247,7 +215,7 @@ namespace EasyDapper
                         }
                     }
                     catch { }
-                    // Never dispose external connection.
+
                     _transaction = null;
                     _connection = null;
                 }

@@ -11,11 +11,6 @@ using EasyDapper.Attributes;
 
 namespace EasyDapper
 {
-    /// <summary>
-    /// Implements single-entity CRUD operations (Insert/Update/Delete/GetById) on top of
-    /// a <see cref="ConnectionManager"/>. Update uses the <see cref="EntityTracker"/> when
-    /// available to emit minimal UPDATE statements.
-    /// </summary>
     internal class CrudOperations
     {
         private readonly ConnectionManager _connectionManager;
@@ -166,11 +161,6 @@ namespace EasyDapper
             return await connection.ExecuteAsync(commandDefinition).ConfigureAwait(false);
         }
 
-        /// <summary>
-        /// Retrieves an entity by its primary key. The supplied <paramref name="id"/> is suitable
-        /// for entities with a single primary key column. For composite primary keys use
-        /// <see cref="GetById{T}(T)"/> instead.
-        /// </summary>
         public T GetById<T>(object id) where T : class
         {
             if (id == null) throw new ArgumentNullException("id");
@@ -184,10 +174,6 @@ namespace EasyDapper
             }
             else
             {
-                // Composite key: try to extract matching property values from the supplied object.
-                // If the caller passed an anonymous object whose properties match the PK names we
-                // use it directly; otherwise we throw because we cannot unambiguously map a single
-                // scalar value onto multiple key columns.
                 parameters = BuildCompositeKeyParameters<T>(id, primaryKeys);
             }
             return connection.QueryFirstOrDefault<T>(query, parameters,
@@ -213,10 +199,6 @@ namespace EasyDapper
                 _connectionManager.CurrentTransaction, _connectionManager.CommandTimeout).ConfigureAwait(false);
         }
 
-        /// <summary>
-        /// Retrieves an entity by supplying an instance whose primary key properties are
-        /// already populated. Works for both single-column and composite primary keys.
-        /// </summary>
         public T GetById<T>(T entity) where T : class
         {
             if (entity == null) throw new ArgumentNullException("entity");
@@ -237,25 +219,19 @@ namespace EasyDapper
                 _connectionManager.CurrentTransaction, _connectionManager.CommandTimeout).ConfigureAwait(false);
         }
 
-        /// <summary>
-        /// Builds a parameter bag for a composite-key lookup. The supplied <paramref name="id"/>
-        /// may be either an existing entity instance (whose PK properties are read) or an
-        /// anonymous object whose property names match the entity's PK property names.
-        /// </summary>
         private static object BuildCompositeKeyParameters<T>(object id, List<PropertyInfo> primaryKeys) where T : class
         {
             var idType = id.GetType();
             var dynamicParams = new DynamicParameters();
             foreach (var pk in primaryKeys)
             {
-                // First try to find a matching property on the supplied id object.
                 var idProp = idType.GetProperty(pk.Name);
                 if (idProp != null)
                 {
                     dynamicParams.Add(pk.Name, idProp.GetValue(id));
                     continue;
                 }
-                // Fall back: maybe the caller passed a Dictionary<string, object>.
+
                 if (id is System.Collections.Generic.IDictionary<string, object> dict && dict.TryGetValue(pk.Name, out var dictValue))
                 {
                     dynamicParams.Add(pk.Name, dictValue);
@@ -320,8 +296,6 @@ namespace EasyDapper
 
         private async Task<int> UpdateSingleWithCompositeKeysAsync<T>(T entity, string query, CancellationToken cancellationToken = default) where T : class
         {
-            // FIX: previously called the synchronous GetOpenConnection() inside an async method,
-            // which can block thread-pool threads under load. Use the async overload instead.
             var connection = await _connectionManager.GetOpenConnectionAsync().ConfigureAwait(false);
             var primaryKeys = _queryCache.GetPrimaryKeyProperties<T>();
             var oldParams = new DynamicParameters();
@@ -338,12 +312,6 @@ namespace EasyDapper
             return await connection.ExecuteAsync(commandDefinition).ConfigureAwait(false);
         }
 
-        /// <summary>
-        /// Copies parameter name/value pairs from <paramref name="source"/> into <paramref name="destination"/>.
-        /// Note: this is a shallow copy that loses type metadata (DbType, Size, Precision). For the
-        /// composite-key UPDATE scenario this is acceptable because all values come from PK columns
-        /// whose types are already known to SQL Server's parameter sniffing infrastructure.
-        /// </summary>
         private void MergeDynamicParameters(DynamicParameters source, DynamicParameters destination)
         {
             if (source == null) return;

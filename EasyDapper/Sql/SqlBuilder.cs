@@ -7,10 +7,6 @@ using Dapper;
 
 namespace EasyDapper
 {
-    /// <summary>
-    /// Builds SQL fragments and parameter bags for dynamic operations such as
-    /// change-tracked UPDATEs, scalar/table-valued function calls and bulk-copy data tables.
-    /// </summary>
     internal class SqlBuilder
     {
         private readonly QueryCache _queryCache;
@@ -21,9 +17,6 @@ namespace EasyDapper
             _queryCache = queryCache;
         }
 
-        /// <summary>
-        /// Builds an UPDATE statement that only modifies the supplied changed properties.
-        /// </summary>
         public string BuildDynamicUpdateQuery<T>(List<string> changedProps, List<PropertyInfo> primaryKeys)
         {
             var tableName = _queryCache.GetTableName<T>();
@@ -91,12 +84,6 @@ namespace EasyDapper
             }
         }
 
-        /// <summary>
-        /// Converts a sequence of entities into a <see cref="DataTable"/> suitable for
-        /// <see cref="SqlBulkCopy"/>. Column types are derived from the CLR property types,
-        /// with <see cref="Nullable{T}"/> unwrapped to its underlying type so that ADO.NET
-        /// can map values to SQL Server types correctly.
-        /// </summary>
         public DataTable ToDataTable<T>(IEnumerable<T> entities, IEnumerable<PropertyInfo> properties)
         {
             var dataTable = new DataTable();
