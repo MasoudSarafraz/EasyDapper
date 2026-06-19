@@ -5,6 +5,46 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [4.8.2] - 2026-06-19
+
+### Fixed
+
+- **Critical: RollbackTransaction destroyed the entire transaction when rolling back a
+  savepoint.** Previously, when a savepoint was active, `RollbackTransaction` issued the
+  `ROLLBACK TRANSACTION <savepoint>` command but then unconditionally called
+  `CleanupTransaction()` in a `finally` block, which disposed the entire outer transaction and
+  cleared the savepoint stack. This meant that nested rollback not only undid the work since
+  the savepoint but also rolled back the entire transaction. Now, savepoint rollback returns
+  early without disposing the outer transaction (mirroring the behaviour of `CommitTransaction`).
+
+- **ConnectionManager now opens external connections when needed.** Previously, when an
+  external `IDbConnection` was supplied (via `DapperServiceFactory.Create(IDbConnection)`), the
+  connection was returned as-is even if it was in `Closed` state. This caused `BeginTransaction`
+  and CRUD operations to throw `InvalidOperationException` because the connection was not open.
+  Now `GetOpenConnection()` and `GetOpenConnectionAsync()` open external connections that are
+  not yet open, without taking ownership of their lifetime (external connections are still not
+  closed or disposed by the service).
+
+### Added
+
+- **84 new unit tests** covering `IDapperService` and its implementation. Total test count is
+  now 157 (up from 73). New test files:
+  - `DapperServiceConstructorTests` — constructor validation, disposal semantics
+  - `DapperServiceTransactionTests` — TransactionCount, Begin/Commit/Rollback, savepoint
+    nesting, error conditions
+  - `DapperServiceCrudTests` — Insert/Update/Delete/GetById with SQL assertion via spy
+    connection, composite key handling, attach/detach change tracking
+  - `DapperSpyCompatibilityTests` — verifies that Dapper works with the spy IDbConnection
+  - `QueryCacheTests` — SQL generation for Insert/Update/Delete/GetById, primary key and
+    identity property resolution, column name mapping, identifier sanitisation
+  - `StoredProcedureExecutorValidationTests` — input validation for stored procedure, scalar
+    function and table function name arguments (theory-based with 25 cases)
+- **SpyDbConnection** — a test-only `IDbConnection` implementation that records all executed
+  commands without contacting a real database. Allows tests to assert on the exact SQL text and
+  parameters that Dapper would have sent.
+- **ListDataReader<T>** — a test-only `IDataReader` implementation that wraps a list of
+  objects, useful for tests that need to simulate result sets returned by the database.
+
 ## [4.8.1] - 2026-06-19
 
 ### Changed

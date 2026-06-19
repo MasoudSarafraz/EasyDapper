@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Concurrent;
 using System.Data;
+using System.Data.Common;
 using System.Data.SqlClient;
 using System.Threading;
 using System.Threading.Tasks;
@@ -78,7 +79,11 @@ namespace EasyDapper
         {
             lock (_lock)
             {
-                if (_externalConnection != null) return _externalConnection;
+                if (_externalConnection != null)
+                {
+                    if (_externalConnection.State != ConnectionState.Open) _externalConnection.Open();
+                    return _externalConnection;
+                }
                 if (_connection == null) _connection = new SqlConnection(_connectionString);
                 EnsureConnectionOpen();
                 return _connection;
@@ -87,7 +92,16 @@ namespace EasyDapper
 
         public async Task<IDbConnection> GetOpenConnectionAsync()
         {
-            if (_externalConnection != null) return _externalConnection;
+            if (_externalConnection != null)
+            {
+                if (_externalConnection.State != ConnectionState.Open)
+                {
+                    var externalAsync = _externalConnection as DbConnection;
+                    if (externalAsync != null) await externalAsync.OpenAsync().ConfigureAwait(false);
+                    else _externalConnection.Open();
+                }
+                return _externalConnection;
+            }
 
             bool needOpen = false;
             SqlConnection localConn = null;
@@ -158,13 +172,12 @@ namespace EasyDapper
             lock (_lock)
             {
                 if (_transaction == null) throw new InvalidOperationException("No transaction is in progress");
-                try
+                if (_savePointStack.TryPop(out var savePointName))
                 {
-                    if (_savePointStack.TryPop(out var savePointName))
-                        ExecuteTransactionCommand($"ROLLBACK TRANSACTION {savePointName}");
-                    else
-                        _transaction.Rollback();
+                    ExecuteTransactionCommand($"ROLLBACK TRANSACTION {savePointName}");
+                    return;
                 }
+                try { _transaction.Rollback(); }
                 finally { CleanupTransaction(); }
             }
         }
