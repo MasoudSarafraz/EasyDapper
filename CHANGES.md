@@ -5,6 +5,112 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [4.8.6] - 2026-06-19
+
+### Fixed
+
+- **Critical: UNION/INTERSECT/EXCEPT parameter collision.** When two queries were combined
+  with `Union`, `UnionAll`, `Intersect`, or `Except`, both queries' parameters used the same
+  `@p1` name, causing the second query to use the first query's parameter values. Now the
+  parent query's SQL is pre-built before merging the child query, so parameter collisions
+  are detected and the child's parameters are renamed (e.g., `@p1` → `@p2`) before being
+  merged into the parent's parameter set.
+
+### Added (138 new advanced tests, total 400)
+
+#### QueryBuilder advanced tests (51 new tests)
+
+`QueryBuilderJoinAdvancedTests` (12 tests):
+- Three-level JOIN chain
+- Mixed INNER and LEFT JOINs
+- All four JOIN types in one query
+- JOIN condition with AND/OR operators
+- Three-way Self-Join chain
+- Repeated JOIN with SELECT
+- JOIN combined with WHERE on main and joined tables
+- Custom JOIN with raw SQL
+- Five JOINs with incremented aliases
+- JOIN with SELECT from multiple tables
+- JOIN with complex ON condition (multiple comparisons)
+
+`QueryBuilderApplyAndSetTests` (15 tests):
+- CROSS APPLY and OUTER APPLY basic scenarios
+- APPLY with sub-query WHERE clause
+- Multiple APPLYs with different types
+- APPLY combined with INNER JOIN
+- UNION, UNION ALL, INTERSECT, EXCEPT basic scenarios
+- Three chained UNIONs
+- UNION combined with ORDER BY
+- UNION parameter renaming (no collision)
+- UNION with JOIN in sub-query
+- APPLY with SELECT from sub-query
+- Multiple APPLYs with same type
+
+`QueryBuilderAggregationAndPagingTests` (24 tests):
+- SUM, AVG, MIN, MAX, COUNT with GROUP BY
+- Multiple aggregates in one query
+- HAVING with aggregate
+- Aggregate without GROUP BY (with and without selected columns)
+- Paging first/second/tenth/large page
+- Paging with multiple ORDER BY
+- ROW_NUMBER with partition and custom alias
+- DISTINCT with TOP
+- COUNT(*) without parameters
+- Complex query: JOIN + GROUP BY + HAVING + ORDER BY + PAGING
+- Complex query: DISTINCT + TOP + WHERE + ORDER BY
+- Multiple WHEREs combined with AND
+- WHERE with complex parenthesised expression
+
+#### DapperService advanced tests (87 new tests)
+
+`DapperServiceCrudAdvancedTests` (21 tests):
+- Insert with complex entity (composite key)
+- Insert populates identity property
+- InsertList edge cases (empty, null)
+- Update with attached entity: only changed columns
+- Update with only one property changed
+- Update with boolean change
+- Update not attached: full update
+- UpdateList/DeleteList multiple entities
+- GetById single key, composite key (anonymous, entity, scalar, partial)
+- Attach/Detach/Reattach lifecycle
+- Attach already attached: no refresh
+- Insert then Update sequence
+- Multiple operations sequence
+- Insert then Attach then Update
+- Delete with composite key
+
+`DapperServiceTransactionAdvancedTests` (18 tests):
+- Five-level nested transactions
+- Savepoint rollback preserves outer transaction
+- Savepoint commit does not execute SQL
+- BeginTransaction creates SAVE TRANSACTION
+- RollbackTransaction executes ROLLBACK TRANSACTION
+- Insert participates in transaction
+- Commit/Rollback removes active transaction
+- 10 cycles of Begin/Rollback and Begin/Commit
+- Begin/Rollback/Begin/Commit state consistency
+- Commit after Rollback throws
+- Rollback after Commit throws
+- Dispose with active transaction
+- TransactionCount after Dispose
+- Transaction with Insert then Rollback
+- Nested savepoint rollback only affects that savepoint
+
+`DapperServiceStoredProceduresAdvancedTests` (48 tests):
+- Validation theory tests with 25+ inline data cases for:
+  - ExecuteStoredProcedure (null, empty, malicious, valid names)
+  - ExecuteScalarFunction (null, empty, malicious, valid names)
+  - ExecuteTableFunction (null, empty, malicious, valid names)
+  - ExecuteMultiResultStoredProcedure (null, empty, malicious, valid names)
+- Execution tests with SpyDbConnection:
+  - ExecuteStoredProcedure with/without parameters
+  - ExecuteScalarFunction with parameters
+  - ExecuteTableFunction with parameters
+- Transaction participation tests
+- Disposed service tests (all 4 SP/function methods throw ObjectDisposedException)
+- Combined validation theory tests (40 inline data cases)
+
 ## [4.8.5] - 2026-06-19
 
 ### Added (60 new advanced AliasManager tests, total 262)
