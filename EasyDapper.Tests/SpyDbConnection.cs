@@ -149,7 +149,7 @@ namespace EasyDapper.Tests
         public string ConnectionString { get; set; }
         public int ConnectionTimeout => 30;
         public string Database => "Spy";
-        public ConnectionState State { get; private set; } = ConnectionState.Closed;
+        public ConnectionState State { get; set; } = ConnectionState.Closed;
         public bool WasOpened { get; private set; }
 
         public List<SpyDbCommand> ExecutedCommands { get; } = new List<SpyDbCommand>();

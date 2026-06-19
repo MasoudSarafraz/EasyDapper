@@ -19,6 +19,7 @@ namespace EasyDapper
         private const int DEFAULT_TIMEOUT = 30;
         private bool _disposed = false;
         private readonly object _lock = new object();
+        private readonly object _connectionOpenLock = new object();
 
         public int TransactionCount
         {
@@ -41,6 +42,14 @@ namespace EasyDapper
         }
 
         public int CommandTimeout => _timeOut;
+
+        public bool IsDisposed
+        {
+            get
+            {
+                lock (_lock) { return _disposed; }
+            }
+        }
 
         public ConnectionManager(string connectionString)
         {
@@ -75,13 +84,19 @@ namespace EasyDapper
             catch { return DEFAULT_TIMEOUT; }
         }
 
+        private void ThrowIfDisposed()
+        {
+            if (_disposed) throw new ObjectDisposedException(nameof(ConnectionManager));
+        }
+
         public IDbConnection GetOpenConnection()
         {
             lock (_lock)
             {
+                ThrowIfDisposed();
                 if (_externalConnection != null)
                 {
-                    if (_externalConnection.State != ConnectionState.Open) _externalConnection.Open();
+                    EnsureExternalConnectionOpen(_externalConnection);
                     return _externalConnection;
                 }
                 if (_connection == null) _connection = new SqlConnection(_connectionString);
@@ -92,36 +107,50 @@ namespace EasyDapper
 
         public async Task<IDbConnection> GetOpenConnectionAsync()
         {
-            if (_externalConnection != null)
-            {
-                if (_externalConnection.State != ConnectionState.Open)
-                {
-                    var externalAsync = _externalConnection as DbConnection;
-                    if (externalAsync != null) await externalAsync.OpenAsync().ConfigureAwait(false);
-                    else _externalConnection.Open();
-                }
-                return _externalConnection;
-            }
-
-            bool needOpen = false;
-            SqlConnection localConn = null;
-
+            IDbConnection conn;
             lock (_lock)
             {
-                if (_connection == null)
+                ThrowIfDisposed();
+                if (_externalConnection != null)
                 {
-                    _connection = new SqlConnection(_connectionString);
-                    needOpen = true;
+                    conn = _externalConnection;
                 }
-                else if (_connection.State != ConnectionState.Open)
+                else
                 {
-                    needOpen = true;
+                    if (_connection == null) _connection = new SqlConnection(_connectionString);
+                    conn = _connection;
                 }
-                localConn = (SqlConnection)_connection;
             }
 
-            if (needOpen) await localConn.OpenAsync().ConfigureAwait(false);
-            return localConn;
+            if (conn.State != ConnectionState.Open && conn.State != ConnectionState.Connecting)
+            {
+                var externalAsync = conn as DbConnection;
+                if (externalAsync != null)
+                {
+                    await externalAsync.OpenAsync().ConfigureAwait(false);
+                }
+                else
+                {
+                    lock (_connectionOpenLock)
+                    {
+                        if (conn.State != ConnectionState.Open) conn.Open();
+                    }
+                }
+            }
+            return conn;
+        }
+
+        private void EnsureExternalConnectionOpen(IDbConnection connection)
+        {
+            if (connection.State == ConnectionState.Broken)
+            {
+                connection.Close();
+                connection.Open();
+            }
+            else if (connection.State != ConnectionState.Open && connection.State != ConnectionState.Connecting)
+            {
+                connection.Open();
+            }
         }
 
         private void EnsureConnectionOpen()
@@ -131,7 +160,7 @@ namespace EasyDapper
                 _connection.Close();
                 _connection.Open();
             }
-            else if (_connection.State != ConnectionState.Open)
+            else if (_connection.State != ConnectionState.Open && _connection.State != ConnectionState.Connecting)
             {
                 _connection.Open();
             }
@@ -141,6 +170,7 @@ namespace EasyDapper
         {
             lock (_lock)
             {
+                ThrowIfDisposed();
                 var connection = GetOpenConnection();
                 if (_transaction != null)
                 {
@@ -159,8 +189,8 @@ namespace EasyDapper
         {
             lock (_lock)
             {
+                ThrowIfDisposed();
                 if (_transaction == null) throw new InvalidOperationException("No transaction is in progress");
-
                 if (_savePointStack.TryPop(out var _)) return;
                 try { _transaction.Commit(); }
                 finally { CleanupTransaction(); }
@@ -171,6 +201,7 @@ namespace EasyDapper
         {
             lock (_lock)
             {
+                ThrowIfDisposed();
                 if (_transaction == null) throw new InvalidOperationException("No transaction is in progress");
                 if (_savePointStack.TryPop(out var savePointName))
                 {
@@ -199,10 +230,12 @@ namespace EasyDapper
             try
             {
                 _transaction?.Dispose();
-                _transaction = null;
-                _savePointStack.Clear();
             }
-            catch {  }
+            catch
+            {
+            }
+            _transaction = null;
+            _savePointStack.Clear();
         }
 
         public void Dispose()
@@ -216,23 +249,39 @@ namespace EasyDapper
             lock (_lock)
             {
                 if (_disposed) return;
-                if (disposing)
+                _disposed = true;
+
+                if (!disposing) return;
+
+                if (_transaction != null)
                 {
-                    try { if (_transaction != null) _transaction.Rollback(); } catch { }
+                    try { _transaction.Rollback(); }
+                    catch
+                    {
+                    }
+                    try { _transaction.Dispose(); }
+                    catch
+                    {
+                    }
+                    _transaction = null;
+                    _savePointStack.Clear();
+                }
+
+                if (_connection != null && _connection != _externalConnection)
+                {
                     try
                     {
-                        if (_connection != null && _connection != _externalConnection)
-                        {
-                            if (_connection.State == ConnectionState.Open) _connection.Close();
-                            _connection.Dispose();
-                        }
+                        if (_connection.State == ConnectionState.Open) _connection.Close();
                     }
-                    catch { }
-
-                    _transaction = null;
+                    catch
+                    {
+                    }
+                    try { _connection.Dispose(); }
+                    catch
+                    {
+                    }
                     _connection = null;
                 }
-                _disposed = true;
             }
         }
     }
