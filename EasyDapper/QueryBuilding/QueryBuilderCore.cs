@@ -18,16 +18,16 @@ namespace EasyDapper
         private readonly AliasManager _aliasManager;
         private readonly ParameterBuilder _parameterBuilder;
         private readonly ExpressionParser _expressionParser;
-        private readonly ConcurrentQueue<string> _filters = new ConcurrentQueue<string>();
-        private readonly ConcurrentQueue<JoinInfo> _joins = new ConcurrentQueue<JoinInfo>();
-        private readonly ConcurrentQueue<ApplyInfo> _applies = new ConcurrentQueue<ApplyInfo>();
-        private readonly ConcurrentQueue<string> _aggregateColumns = new ConcurrentQueue<string>();
-        private readonly ConcurrentQueue<string> _groupByColumns = new ConcurrentQueue<string>();
-        private readonly ConcurrentQueue<string> _unionClauses = new ConcurrentQueue<string>();
-        private readonly ConcurrentQueue<string> _intersectClauses = new ConcurrentQueue<string>();
-        private readonly ConcurrentQueue<string> _exceptClauses = new ConcurrentQueue<string>();
-        private readonly ConcurrentQueue<string> _selectedColumnsQueue = new ConcurrentQueue<string>();
-        private readonly ConcurrentQueue<string> _orderByQueue = new ConcurrentQueue<string>();
+        private readonly List<string> _filters = new List<string>();
+        private readonly List<JoinInfo> _joins = new List<JoinInfo>();
+        private readonly List<ApplyInfo> _applies = new List<ApplyInfo>();
+        private readonly List<string> _aggregateColumns = new List<string>();
+        private readonly List<string> _groupByColumns = new List<string>();
+        private readonly List<string> _unionClauses = new List<string>();
+        private readonly List<string> _intersectClauses = new List<string>();
+        private readonly List<string> _exceptClauses = new List<string>();
+        private readonly List<string> _selectedColumnsQueue = new List<string>();
+        private readonly List<string> _orderByQueue = new List<string>();
         private string _rowNumberClause = string.Empty;
         private string _havingClause = string.Empty;
         private int _timeOut;
@@ -36,10 +36,11 @@ namespace EasyDapper
         private bool _isCountQuery = false;
         private int? _limit = null;
         private int? _offset = null;
-        private readonly object _pagingLock = new object();
         private bool _disposed = false;
 
         private readonly ConnectionManager _connectionManager;
+        private readonly object _stateLock = new object();
+        private readonly object _executeLock = new object();
 
         private static readonly char[] InvalidAliasChars =
             new[] { ']', '[', ';', '-', '/', '*', '\'', '"', '(', ')', '&', '|', '^', '%', '~',
@@ -107,56 +108,67 @@ namespace EasyDapper
         public void Where(Expression<Func<T, bool>> filter)
         {
             if (filter == null) throw new ArgumentNullException("filter");
-            _filters.Enqueue(_expressionParser.ParseExpressionWithBrackets(filter.Body));
+            var parsed = _expressionParser.ParseExpressionWithBrackets(filter.Body);
+            lock (_stateLock) { _filters.Add(parsed); }
         }
 
         public void Select(params Expression<Func<T, object>>[] columns)
         {
             if (columns == null) return;
-            foreach (var c in columns) if (c != null) _selectedColumnsQueue.Enqueue(_expressionParser.ParseSelectMember(c.Body));
+            var parsed = new List<string>();
+            foreach (var c in columns) if (c != null) parsed.Add(_expressionParser.ParseSelectMember(c.Body));
+            lock (_stateLock) { _selectedColumnsQueue.AddRange(parsed); }
         }
 
         public void Select<TSource>(params Expression<Func<TSource, object>>[] columns)
         {
             if (columns == null) return;
-            foreach (var c in columns) if (c != null) _selectedColumnsQueue.Enqueue(_expressionParser.ParseSelectMember(c.Body));
+            var parsed = new List<string>();
+            foreach (var c in columns) if (c != null) parsed.Add(_expressionParser.ParseSelectMember(c.Body));
+            lock (_stateLock) { _selectedColumnsQueue.AddRange(parsed); }
         }
 
-        public void Distinct() => SetClause(ref _distinctClause, "DISTINCT");
+        public void Distinct()
+        {
+            lock (_stateLock) { _distinctClause = "DISTINCT"; }
+        }
 
         public void Top(int count)
         {
             if (count <= 0) throw new ArgumentOutOfRangeException("count");
-            SetClause(ref _topClause, "TOP (" + count + ")");
+            lock (_stateLock) { _topClause = "TOP (" + count + ")"; }
         }
 
-        public void Count() => SetFlag(ref _isCountQuery, true);
+        public void Count()
+        {
+            lock (_stateLock) { _isCountQuery = true; }
+        }
 
         public void OrderBy(string orderByClause)
         {
             if (string.IsNullOrEmpty(orderByClause)) return;
-            _orderByQueue.Enqueue(orderByClause);
+            lock (_stateLock) { _orderByQueue.Add(orderByClause); }
         }
 
         public void OrderByAscending(Expression<Func<T, object>> keySelector)
         {
             if (keySelector == null) throw new ArgumentNullException("keySelector");
-            foreach (var col in _expressionParser.ExtractColumnListWithBrackets(keySelector.Body).Select(c => c + " ASC"))
-                _orderByQueue.Enqueue(col);
+            var cols = _expressionParser.ExtractColumnListWithBrackets(keySelector.Body).Select(c => c + " ASC").ToList();
+            lock (_stateLock) { _orderByQueue.AddRange(cols); }
         }
 
         public void OrderByDescending(Expression<Func<T, object>> keySelector)
         {
             if (keySelector == null) throw new ArgumentNullException("keySelector");
-            foreach (var col in _expressionParser.ExtractColumnListWithBrackets(keySelector.Body).Select(c => c + " DESC"))
-                _orderByQueue.Enqueue(col);
+            var cols = _expressionParser.ExtractColumnListWithBrackets(keySelector.Body).Select(c => c + " DESC").ToList();
+            lock (_stateLock) { _orderByQueue.AddRange(cols); }
         }
 
         public void Paging(int pageSize, int pageNumber = 1)
         {
             if (pageSize <= 0) throw new ArgumentException("Page size must be greater than zero");
             if (pageNumber <= 0) throw new ArgumentException("Page number must be greater than zero");
-            lock (_pagingLock)
+            lock (_stateLock)
             {
                 _limit = pageSize;
                 _offset = (pageNumber - 1) * pageSize;
@@ -177,20 +189,23 @@ namespace EasyDapper
             var agg = string.IsNullOrEmpty(alias)
                 ? fn + "(" + parsed + ")"
                 : fn + "(" + parsed + ") AS " + QuoteIdentifier(alias);
-            _aggregateColumns.Enqueue(agg);
+            lock (_stateLock) { _aggregateColumns.Add(agg); }
         }
 
         public void GroupBy(params Expression<Func<T, object>>[] groupByColumns)
         {
             if (groupByColumns == null) return;
+            var parsed = new List<string>();
             foreach (var column in groupByColumns)
-                if (column != null) _groupByColumns.Enqueue(_expressionParser.ParseMemberWithBrackets(column.Body));
+                if (column != null) parsed.Add(_expressionParser.ParseMemberWithBrackets(column.Body));
+            lock (_stateLock) { _groupByColumns.AddRange(parsed); }
         }
 
         public void Having(Expression<Func<T, bool>> havingCondition)
         {
             if (havingCondition == null) throw new ArgumentNullException("havingCondition");
-            _havingClause = _expressionParser.ParseExpressionWithBrackets(havingCondition.Body);
+            var parsed = _expressionParser.ParseExpressionWithBrackets(havingCondition.Body);
+            lock (_stateLock) { _havingClause = parsed; }
         }
 
         public void Row_Number(Expression<Func<T, object>> partitionBy, Expression<Func<T, object>> orderBy, string alias = "RowNumber")
@@ -200,8 +215,9 @@ namespace EasyDapper
             ValidateCustomAlias(alias);
             var parts = _expressionParser.ExtractColumnListWithBrackets(partitionBy.Body);
             var orders = _expressionParser.ExtractColumnListWithBrackets(orderBy.Body);
-            _rowNumberClause = "ROW_NUMBER() OVER (PARTITION BY " + string.Join(", ", parts)
+            var clause = "ROW_NUMBER() OVER (PARTITION BY " + string.Join(", ", parts)
                 + " ORDER BY " + string.Join(", ", orders) + ") AS " + QuoteIdentifier(alias);
+            lock (_stateLock) { _rowNumberClause = clause; }
         }
 
         public void InnerJoin<TLeft, TRight>(Expression<Func<TLeft, TRight, bool>> onCondition) => AddJoin("INNER JOIN", onCondition);
@@ -219,7 +235,8 @@ namespace EasyDapper
             var leftAlias = _aliasManager.GetAliasForType(typeof(TLeft));
             string rightAlias;
             bool isSelfJoin = typeof(TLeft) == typeof(TRight);
-            int joinCount = _joins.Count(j => j.TableName == rightTableName);
+            int joinCount;
+            lock (_stateLock) { joinCount = _joins.Count(j => j.TableName == rightTableName); }
             bool isRepeatedJoin = joinCount > 0;
             if (isSelfJoin || isRepeatedJoin) rightAlias = _aliasManager.GetUniqueAliasForType(typeof(TRight));
             else rightAlias = _aliasManager.GetAliasForType(typeof(TRight));
@@ -229,7 +246,8 @@ namespace EasyDapper
                 { onCondition.Parameters[1], rightAlias }
             };
             var parsed = _expressionParser.ParseExpressionWithParameterMappingAndBrackets(onCondition.Body, parameterAliases);
-            _joins.Enqueue(new JoinInfo { JoinType = joinType, TableName = rightTableName, Alias = rightAlias, OnCondition = parsed });
+            var info = new JoinInfo { JoinType = joinType, TableName = rightTableName, Alias = rightAlias, OnCondition = parsed };
+            lock (_stateLock) { _joins.Add(info); }
         }
 
         public void CrossApply<TSubQuery>(Expression<Func<T, TSubQuery, bool>> onCondition, Func<IQueryBuilder<TSubQuery>, IQueryBuilder<TSubQuery>> subBuilder)
@@ -289,7 +307,8 @@ namespace EasyDapper
 
             var applyAlias = _aliasManager.GenerateSubQueryAlias(QueryBuilderCache.GetTableName(typeof(TSubQuery)));
             _aliasManager.SetSubQueryAlias(typeof(TSubQuery), applyAlias);
-            _applies.Enqueue(new ApplyInfo { ApplyType = applyType, SubQuery = "(" + subSql + ") AS " + QuoteIdentifier(applyAlias), SubQueryAlias = applyAlias });
+            var info = new ApplyInfo { ApplyType = applyType, SubQuery = "(" + subSql + ") AS " + QuoteIdentifier(applyAlias), SubQueryAlias = applyAlias };
+            lock (_stateLock) { _applies.Add(info); }
         }
 
         private string ExtractSubQueryTableAlias(string sql)
@@ -314,49 +333,94 @@ namespace EasyDapper
             foreach (var renaming in renamings) sql = SafeReplaceParameter(sql, renaming.Key, renaming.Value);
 
             var clause = op + " (" + sql + ")";
-            if (op.StartsWith("UNION")) _unionClauses.Enqueue(clause);
-            else if (op == "INTERSECT") _intersectClauses.Enqueue(clause);
-            else if (op == "EXCEPT") _exceptClauses.Enqueue(clause);
+            lock (_stateLock)
+            {
+                if (op.StartsWith("UNION")) _unionClauses.Add(clause);
+                else if (op == "INTERSECT") _intersectClauses.Add(clause);
+                else if (op == "EXCEPT") _exceptClauses.Add(clause);
+            }
         }
 
         public IEnumerable<T> Execute()
-            => GetOpenConnection().Query<T>(BuildQuery(), _parameterBuilder.GetParameters(),
-                GetTransaction(), commandTimeout: _timeOut);
+        {
+            lock (_executeLock)
+            {
+                var query = BuildQuery();
+                return GetOpenConnection().Query<T>(query, _parameterBuilder.GetParameters(),
+                    GetTransaction(), commandTimeout: _timeOut);
+            }
+        }
 
         public IEnumerable<TResult> Execute<TResult>()
-            => GetOpenConnection().Query<TResult>(BuildQuery(), _parameterBuilder.GetParameters(),
-                GetTransaction(), commandTimeout: _timeOut);
-
-        public async Task<IEnumerable<T>> ExecuteAsync()
         {
-            var query = BuildQuery();
-            return await GetOpenConnection().QueryAsync<T>(query, _parameterBuilder.GetParameters(),
-                GetTransaction(), commandTimeout: _timeOut);
+            lock (_executeLock)
+            {
+                var query = BuildQuery();
+                return GetOpenConnection().Query<TResult>(query, _parameterBuilder.GetParameters(),
+                    GetTransaction(), commandTimeout: _timeOut);
+            }
         }
 
-        public async Task<IEnumerable<TResult>> ExecuteAsync<TResult>()
+        public Task<IEnumerable<T>> ExecuteAsync()
         {
-            var query = BuildQuery();
-            return await GetOpenConnection().QueryAsync<TResult>(query, _parameterBuilder.GetParameters(),
-                GetTransaction(), commandTimeout: _timeOut);
+            string query;
+            IDictionary<string, object> parameters;
+            IDbTransaction transaction;
+            int timeout;
+            lock (_executeLock)
+            {
+                query = BuildQuery();
+                parameters = _parameterBuilder.GetParameters();
+                transaction = GetTransaction();
+                timeout = _timeOut;
+            }
+            return ExecuteAsyncCore<T>(query, parameters, transaction, timeout);
         }
 
-        public string GetRawSql() => BuildQuery();
+        public Task<IEnumerable<TResult>> ExecuteAsync<TResult>()
+        {
+            string query;
+            IDictionary<string, object> parameters;
+            IDbTransaction transaction;
+            int timeout;
+            lock (_executeLock)
+            {
+                query = BuildQuery();
+                parameters = _parameterBuilder.GetParameters();
+                transaction = GetTransaction();
+                timeout = _timeOut;
+            }
+            return ExecuteAsyncCore<TResult>(query, parameters, transaction, timeout);
+        }
+
+        private async Task<IEnumerable<TResult>> ExecuteAsyncCore<TResult>(string query, IDictionary<string, object> parameters, IDbTransaction transaction, int timeout)
+        {
+            var connection = GetOpenConnection();
+            return await connection.QueryAsync<TResult>(query, parameters, transaction, commandTimeout: timeout).ConfigureAwait(false);
+        }
+
+        public string GetRawSql()
+        {
+            lock (_stateLock) { return BuildQueryLocked(); }
+        }
 
         internal string BuildQuery()
         {
-            ValidateAggregates();
-            var selectClause = BuildSelectClause();
-            var fromClause = BuildFromClause();
-            var joinClauses = BuildJoinClauses();
-            var applyClauses = BuildApplyClauses();
-            var whereClause = BuildWhereClause();
-            var groupByClause = BuildGroupByClause();
-            var havingClause = BuildHavingClause();
-            var orderByClause = BuildOrderByClause();
-            var paginationClause = BuildPaginationClause(orderByClause);
-            if (string.IsNullOrEmpty(orderByClause) && !string.IsNullOrEmpty(paginationClause))
-                orderByClause = BuildOrderByClause();
+            lock (_stateLock) { return BuildQueryLocked(); }
+        }
+
+        private string BuildQueryLocked()
+        {
+            ValidateAggregatesLocked();
+            var selectClause = BuildSelectClauseLocked();
+            var fromClause = BuildFromClauseLocked();
+            var joinClauses = BuildJoinClausesLocked();
+            var applyClauses = BuildApplyClausesLocked();
+            var whereClause = BuildWhereClauseLocked();
+            var groupByClause = BuildGroupByClauseLocked();
+            var havingClause = BuildHavingClauseLocked();
+            var orderByClause = BuildOrderByClauseLocked();
+            var paginationClause = BuildPaginationClauseLocked(ref orderByClause);
             var sb = new StringBuilder();
             sb.Append(selectClause).Append(fromClause).Append(joinClauses).Append(applyClauses);
             if (!string.IsNullOrEmpty(whereClause)) sb.Append(' ').Append(whereClause);
@@ -370,22 +434,22 @@ namespace EasyDapper
             return sb.ToString();
         }
 
-        private void ValidateAggregates()
+        private void ValidateAggregatesLocked()
         {
-            if (_aggregateColumns.Any() && !_groupByColumns.Any() && _selectedColumnsQueue.Any())
+            if (_aggregateColumns.Count > 0 && _groupByColumns.Count == 0 && _selectedColumnsQueue.Count > 0)
                 throw new InvalidOperationException("When using aggregate functions, either use GROUP BY or avoid selecting non-aggregate columns.");
         }
 
-        private string BuildSelectClause()
+        private string BuildSelectClauseLocked()
         {
             string columns;
             if (_isCountQuery) columns = "COUNT(*) AS TotalCount";
-            else if (_selectedColumnsQueue.Any())
+            else if (_selectedColumnsQueue.Count > 0)
             {
-                columns = string.Join(", ", _selectedColumnsQueue.ToArray());
-                if (_aggregateColumns.Any()) columns = string.Join(", ", _aggregateColumns.ToArray()) + ", " + columns;
+                columns = string.Join(", ", _selectedColumnsQueue);
+                if (_aggregateColumns.Count > 0) columns = string.Join(", ", _aggregateColumns) + ", " + columns;
             }
-            else if (_aggregateColumns.Any()) columns = string.Join(", ", _aggregateColumns.ToArray());
+            else if (_aggregateColumns.Count > 0) columns = string.Join(", ", _aggregateColumns);
             else columns = string.Join(", ", typeof(T).GetProperties().Select(p =>
                 _aliasManager.GetAliasForType(typeof(T)) + ".[" + QueryBuilderCache.GetColumnName(p) + "] AS " + QuoteIdentifier(p.Name)));
             if (!string.IsNullOrEmpty(_rowNumberClause)) columns = _rowNumberClause + ", " + columns;
@@ -396,14 +460,14 @@ namespace EasyDapper
             return result.ToString();
         }
 
-        private string BuildFromClause()
+        private string BuildFromClauseLocked()
         {
             var tableName = QueryBuilderCache.GetTableName(typeof(T));
             var alias = _aliasManager.GetAliasForTable(tableName);
             return " FROM " + tableName + " AS " + QuoteIdentifier(alias);
         }
 
-        private string BuildJoinClauses()
+        private string BuildJoinClausesLocked()
         {
             var sb = new StringBuilder();
             foreach (var join in _joins)
@@ -413,7 +477,7 @@ namespace EasyDapper
             return sb.ToString();
         }
 
-        private string BuildApplyClauses()
+        private string BuildApplyClausesLocked()
         {
             var sb = new StringBuilder();
             foreach (var apply in _applies)
@@ -421,32 +485,27 @@ namespace EasyDapper
             return sb.ToString();
         }
 
-        private string BuildWhereClause()
-            => _filters.Any() ? "WHERE " + string.Join(" AND ", _filters.ToArray()) : string.Empty;
+        private string BuildWhereClauseLocked()
+            => _filters.Count > 0 ? "WHERE " + string.Join(" AND ", _filters) : string.Empty;
 
-        private string BuildGroupByClause()
-            => _groupByColumns.Any() ? "GROUP BY " + string.Join(", ", _groupByColumns.ToArray()) : string.Empty;
+        private string BuildGroupByClauseLocked()
+            => _groupByColumns.Count > 0 ? "GROUP BY " + string.Join(", ", _groupByColumns) : string.Empty;
 
-        private string BuildHavingClause()
+        private string BuildHavingClauseLocked()
             => !string.IsNullOrEmpty(_havingClause) ? "HAVING " + _havingClause : string.Empty;
 
-        private string BuildOrderByClause()
-            => _orderByQueue.Any() ? "ORDER BY " + string.Join(", ", _orderByQueue.ToArray()) : string.Empty;
+        private string BuildOrderByClauseLocked()
+            => _orderByQueue.Count > 0 ? "ORDER BY " + string.Join(", ", _orderByQueue) : string.Empty;
 
-        private string BuildPaginationClause(string orderByClause)
+        private string BuildPaginationClauseLocked(ref string orderByClause)
         {
-            int? limit, offset;
-            lock (_pagingLock) { limit = _limit; offset = _offset; }
-            if (limit.HasValue)
+            if (!_limit.HasValue) return string.Empty;
+            if (string.IsNullOrEmpty(orderByClause))
             {
-                if (string.IsNullOrEmpty(orderByClause))
-                {
-                    _orderByQueue.Enqueue("(SELECT 1)");
-                    orderByClause = BuildOrderByClause();
-                }
-                return "OFFSET " + offset + " ROWS FETCH NEXT " + limit + " ROWS ONLY";
+                _orderByQueue.Add("(SELECT 1)");
+                orderByClause = BuildOrderByClauseLocked();
             }
-            return string.Empty;
+            return "OFFSET " + _offset + " ROWS FETCH NEXT " + _limit + " ROWS ONLY";
         }
 
         private int FindWhereInsertPosition(string sql)
@@ -472,9 +531,6 @@ namespace EasyDapper
 
             return minTerminator != -1 ? minTerminator : sql.Length;
         }
-
-        private void SetClause(ref string clauseField, string value) { clauseField = value; }
-        private void SetFlag(ref bool flagField, bool value) { flagField = value; }
 
         private string SafeReplaceParameter(string sql, string oldName, string newName)
         {
