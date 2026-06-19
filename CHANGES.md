@@ -5,6 +5,69 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [4.8.3] - 2026-06-19
+
+### Fixed
+
+- **Critical: ConnectionManager now checks `_disposed` before every public operation.**
+  Previously, calling `BeginTransaction`, `CommitTransaction`, `RollbackTransaction`,
+  `GetOpenConnection` or `GetOpenConnectionAsync` on a disposed `ConnectionManager` could
+  result in `ObjectDisposedException` from the underlying `IDbConnection`, `NullReferenceException`
+  from accessing a disposed transaction, or silently corrupt internal state. All public methods
+  now perform an explicit `ThrowIfDisposed()` check at entry, providing a clear
+  `ObjectDisposedException(nameof(ConnectionManager))` instead of cryptic downstream errors.
+
+- **Critical: Race condition in `GetOpenConnectionAsync`.** Two concurrent calls could both observe
+  `_connection.State != Open`, both set `needOpen = true`, and both invoke `OpenAsync` on the
+  same `SqlConnection`. The second call would throw `InvalidOperationException` ("The connection
+  is already open"). Now the async path uses a separate `_connectionOpenLock` for the actual
+  `Open` call, ensuring that only one thread opens the connection at a time. The state check is
+  repeated inside the lock to avoid redundant opens.
+
+- **`EnsureConnectionOpen` now also accepts `ConnectionState.Connecting`.** Previously, if the
+  connection was in the middle of connecting (e.g. after a previous async open was in flight),
+  `EnsureConnectionOpen` would call `Open()` again, throwing an exception. Now `Connecting`
+  is treated as "in progress" and the connection is returned as-is.
+
+- **`GetOpenConnectionAsync` now opens external connections via `DbConnection.OpenAsync`.**
+  Previously, only the connection-string-owned path used `OpenAsync`; external connections
+  fell back to the synchronous `Open()` call. This blocked the thread pool on slow-opening
+  external connections.
+
+- **`DapperService.Dispose` now uses `SafeDispose` for each collaborator.** Previously, if
+  `_connectionManager.Dispose()` threw an exception, `_entityTracker.Dispose()` and
+  `_queryCache.Dispose()` would never run, leaking tracked entities and cached SQL. Each
+  collaborator is now disposed in its own try/catch, ensuring that one failure cannot prevent
+  cleanup of the others.
+
+- **`ConnectionManager.Dispose` now disposes the connection even if `Close()` fails.**
+  Previously, if `_connection.Close()` threw an exception, `_connection.Dispose()` was skipped
+  because both calls were in the same try block. The two calls are now in separate try/catch
+  blocks so that a failed close does not prevent disposal.
+
+- **`ConnectionManager.Dispose` now disposes the transaction even if `Rollback()` fails.**
+  Same pattern as the connection fix above.
+
+- **`DapperService` now performs `ThrowIfDisposed()` on every public method.** Previously, only
+  `BeginTransaction`, `CommitTransaction`, and `RollbackTransaction` checked disposal. All
+  other methods (Insert, Update, Delete, GetById, Query, ExecuteStoredProcedure, etc.) would
+  pass through to the underlying collaborators, which could fail with cryptic
+  `NullReferenceException` if the connection manager had been disposed. All public methods now
+  throw `ObjectDisposedException(nameof(DapperService))` upfront.
+
+- **`DapperService.TransactionCount()` returns 0 after disposal** instead of attempting to
+  access the disposed connection manager.
+
+### Added
+
+- **34 new unit tests** covering connection and transaction lifecycle, bringing the total to
+  191 (up from 157). New test files:
+  - `ConnectionLifecycleTests` (29 tests) — disposal semantics, lazy connection opening,
+    broken-connection recovery, savepoint rollback, begin/commit/rollback cycles, external
+    connection handling
+  - `ConnectionConcurrencyTests` (5 tests) — concurrent Begin/Commit, Begin/Rollback, nested
+    savepoints, concurrent reads, dispose-during-use with 10 threads × 100 iterations each
+
 ## [4.8.2] - 2026-06-19
 
 ### Fixed
