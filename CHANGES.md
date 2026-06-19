@@ -5,6 +5,90 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [4.8.5] - 2026-06-19
+
+### Added (60 new advanced AliasManager tests, total 262)
+
+Comprehensive test suite for `AliasManager` covering complex real-world scenarios that the
+basic tests did not exercise. Tests are organised into 6 new test classes:
+
+#### `AliasManagerSelfJoinTests` (7 tests)
+Simulates the Self-Join scenario (e.g. `Employee INNER JOIN Employee`) where
+`GetUniqueAliasForType` must allocate a fresh alias without overwriting the type's primary
+FROM alias. Verifies the fix for the critical Self-Join bug (scenario C1).
+- Two aliases are distinct
+- Left alias is the primary FROM alias
+- Right alias is registered in `_allAliases`
+- `GetAliasForType` still returns the primary alias after Self-Join
+- Multiple Self-Joins produce fresh aliases each time
+- Primary alias is reusable as table alias
+- Right alias does not pollute `_typeToAlias` registry
+
+#### `AliasManagerRepeatedJoinTests` (5 tests)
+Simulates the Repeated-Join scenario (e.g. `Order INNER JOIN Customer INNER JOIN Customer`)
+where the second join to the same type must allocate a fresh alias via `GetUniqueAliasForType`.
+- First call returns the primary alias
+- Second call returns a different alias
+- Third call returns yet another alias
+- Primary alias unchanged after multiple calls
+- All aliases registered as Table (not SubQuery)
+
+#### `AliasManagerApplySubQueryTests` (6 tests)
+Simulates the CROSS/OUTER APPLY scenario where a sub-query alias must be tracked separately
+from the table alias for the same type.
+- Sub-query alias is distinct from table alias
+- Sub-query alias is recognised as SubQuery by `IsSubqueryAlias`
+- `TryGetSubQueryAlias` returns the registered alias
+- Sub-query and table aliases for the same type both work
+- Multiple sub-queries for the same type: last one wins
+- Sub-query alias does not affect table alias lookup
+
+#### `AliasManagerEdgeCaseTests` (20 tests)
+Edge cases that exercise boundary conditions:
+- Alias generation for exactly 10/11 character table names (truncation boundary)
+- Alias generation for single-character table names
+- Alias generation for tables with custom schema (only table name is used)
+- Alias generation for names with and without brackets
+- Sub-query alias truncation boundary (8/9 characters)
+- 1000 aliases all unique (stress)
+- 1000 sub-query aliases all unique (stress)
+- Mixed table names produce unique aliases
+- Idempotent `SetTableAlias`/`SetTypeAlias`/`SetSubQueryAlias` for same alias
+- Duplicate alias detection across Table/SubQuery categories
+- Different schemas treated as different tables
+- Different types produce different aliases
+- `ClearAliases` resets counters and allows reusing old aliases
+- `GetAllTableAliases` returns empty after `ClearAliases`
+
+#### `AliasManagerAliasLifecycleTests` (4 tests)
+End-to-end simulations that mirror what `QueryBuilderCore` actually does:
+- Full query simulation (FROM + 2 JOINs + 1 APPLY) produces consistent aliases
+- Self-Join with APPLY produces consistent aliases
+- Repeated JOIN with APPLY produces consistent aliases
+- UNION scenario: two independent `AliasManager` instances produce same aliases for same type
+
+#### `AliasManagerComplexScenarioTests` (6 tests)
+Complex real-world scenarios:
+- Deep nested APPLY chain (3 levels of sub-queries)
+- Multiple Self-Joins for different types in same query
+- Mixed Table/Type/SubQuery aliases with proper isolation
+- Alias collision avoidance: 200 generated aliases all unique
+- Table alias switch preserves other tables' aliases
+- Switching to an alias used by another table throws
+
+#### `AliasManagerConcurrencyAdvancedTests` (10 stress tests)
+High-concurrency stress tests with up to 50 threads × 1000 iterations:
+- Concurrent `GetUniqueAliasForType`: 20000 aliases all distinct
+- Concurrent `GenerateAlias` + `GenerateSubQueryAlias`: 1000 aliases all distinct
+- Concurrent `SetTableAlias`: no lost updates, all tables registered
+- Concurrent read during write: no exceptions
+- Concurrent `GetAliasForType` first-call-wins: 50 threads, single distinct result
+- Concurrent `SetSubQueryAlias` last-write-wins
+- Concurrent `ClearAliases` during use: no corruption
+- Concurrent mixed operations (6 different methods): stable
+- High-volume: 10000 aliases all unique
+- Many table names: each gets distinct primary alias
+
 ## [4.8.4] - 2026-06-19
 
 ### Fixed (Critical thread-safety bugs for production use)
