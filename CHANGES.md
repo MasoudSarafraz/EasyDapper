@@ -5,6 +5,92 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [4.8.4] - 2026-06-19
+
+### Fixed (Critical thread-safety bugs for production use)
+
+This release hardens the library for high-concurrency scenarios where thousands of users may
+share a `DapperService` instance (e.g. ASP.NET singleton) or build queries concurrently from
+multiple threads. Several pre-existing race conditions could produce wrong SQL, lost updates,
+or `InvalidOperationException` under load.
+
+- **Critical: Removed static expression template cache from `ExpressionParser`.** The cache was
+  keyed by a structural hash code that could collide for different expressions. On collision,
+  the second expression would receive the first expression's SQL template, producing silently
+  wrong SQL with mismatched parameters. The cache also leaked memory unboundedly because
+  expression hash codes are not stable across GC. The cache has been removed; each parse now
+  builds the SQL directly. This is slightly slower (~5-10% on micro-benchmarks) but is correct
+  under all concurrency scenarios.
+
+- **Critical: `AliasManager` now uses a single `_registrationLock` for all alias registration
+  operations.** Previously, `SetTableAlias`, `SetTypeAlias`, `SetSubQueryAlias` and the factory
+  inside `GetAliasForTable`/`GetAliasForType` performed multi-step read-modify-write sequences
+  on `ConcurrentDictionary` without atomicity guarantees. Two concurrent calls could:
+  - Both succeed in `_allAliases.TryAdd` with different aliases for the same table, but only
+    one would be stored in `_tableToAlias`, leaking the other in `_allAliases` forever.
+  - Both observe the same "old alias" in `_tableToAlias` and both try to remove it from
+    `_allAliases`, with one succeeding and the other silently no-op'ing.
+
+  All registration operations now hold `_registrationLock` for the entire check-and-add
+  sequence, eliminating the TOCTOU race. Read operations (`TryGetTypeAlias`,
+  `TryGetSubQueryAlias`, `IsSubqueryAlias`) remain lock-free for read-heavy workloads.
+
+- **Critical: `QueryBuilderCore` state mutations are now protected by a single `_stateLock`.**
+  Previously, the builder used `ConcurrentQueue<T>` for filters, joins, etc., but the scalar
+  fields (`_distinctClause`, `_topClause`, `_isCountQuery`, `_rowNumberClause`, `_havingClause`,
+  `_limit`, `_offset`) were not protected at all. Two concurrent calls to `Distinct()` and
+  `Top()` could race on the `ref` parameters of `SetClause`, losing one of the updates. The
+  builder now uses a plain `List<T>` plus an explicit `_stateLock` for all state mutations,
+  which is both simpler and provably correct.
+
+- **Critical: `QueryBuilderCore.Execute` and `ExecuteAsync` are now serialized by
+  `_executeLock`.** Previously, two concurrent `Execute` calls would both invoke
+  `BuildQuery()` (which mutates `_orderByQueue` via the synthetic `(SELECT 1)` injection for
+  paging) and both would consume the same `_parameterBuilder`, producing duplicate parameter
+  names and wrong SQL. Now, `Execute` is serialized so that only one thread can build and run
+  a query at a time. The lock is held only for the synchronous portion of `ExecuteAsync`
+  (query building and parameter snapshotting); the actual async I/O happens outside the lock.
+
+- **`ParameterBuilder.GetParameters()` now returns a snapshot copy.** Previously it returned
+  the live `ConcurrentDictionary`, which could be modified by another thread while Dapper was
+  iterating it, causing `InvalidOperationException`. Callers that need the live dictionary for
+  internal merge operations can use the new `GetInternalParameters()` method.
+
+- **`ParameterBuilder.MergeParameters` now accepts `IDictionary<string, object>` instead of
+  `ConcurrentDictionary<string, object>`.** This decouples the merge logic from the storage
+  type and makes it safe to pass snapshots.
+
+- **`QueryBuilderCore.ExecuteAsync` no longer holds `_executeLock` across an `await`.**
+  Previously, `async` methods that took a lock would compile to a synchronous method (with a
+  CS1998 warning) because C# 5 / net45 does not support `await` inside `lock`. The lock is
+  now released before the `await` to properly support true async I/O.
+
+### Added (11 new stress tests, total 202)
+
+- `ThreadSafetyStressTests` — 11 tests with up to 20 threads × 1000 iterations each:
+  - `AliasManager_ConcurrentGetAliasForTable_NoLeaks` — 20 threads × 100 iters, verifies
+    no alias leaks in `_allAliases`.
+  - `AliasManager_ConcurrentGetAliasForDifferentTables_AllUnique` — 10 threads × 100 iters
+    across 6 different tables, verifies each table gets exactly one alias.
+  - `AliasManager_ConcurrentSetTableAlias_NoCorruption` — 20 threads × 50 iters with
+    concurrent `SetTableAlias` for different tables.
+  - `QueryBuilder_ConcurrentBuildQuery_ConsistentResults` — 10 threads × 50 iters, verifies
+    identical SQL is produced every time.
+  - `QueryBuilder_ConcurrentWhereAdd_AllFiltersPresent` — 5 threads × 20 iters × 10
+    concurrent `Where` calls per builder.
+  - `QueryBuilder_ConcurrentDistinctAndTop_NoCorruption` — 10 threads × 50 iters, verifies
+    both `DISTINCT` and `TOP` appear in every generated SQL.
+  - `ParameterBuilder_ConcurrentAddAndMerge_NoDuplicates` — 20 threads × 100 iters, verifies
+    exactly 2000 distinct parameters are produced.
+  - `QueryBuilder_DisposeDuringBuildQuery_DoesNotCorrupt` — 3 threads with 1000 iterations
+    each, where one thread disposes mid-stream.
+  - `QueryBuilderCache_ConcurrentGetTableName_AllSameInstance` — 20 threads × 100 iters,
+    verifies the static cache is thread-safe.
+  - `MultipleDapperServices_ConcurrentUse_NoCrossContamination` — 10 threads each with its
+    own `DapperService` instance, verifies no cross-contamination.
+  - `AliasManager_ConcurrentMixedOperations_Stable` — 4 threads running different operations
+    (GetAliasForTable, GetAliasForType, SetTableAlias, IsSubqueryAlias) concurrently.
+
 ## [4.8.3] - 2026-06-19
 
 ### Fixed

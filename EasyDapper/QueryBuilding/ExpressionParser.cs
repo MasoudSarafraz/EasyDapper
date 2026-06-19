@@ -12,7 +12,6 @@ namespace EasyDapper
     {
         private readonly AliasManager _aliasManager;
         private readonly ParameterBuilder _parameterBuilder;
-        private static readonly ConcurrentDictionary<int, SqlTemplate> _expressionTemplateCache = new ConcurrentDictionary<int, SqlTemplate>();
 
         public ExpressionParser(AliasManager aliasManager, ParameterBuilder parameterBuilder)
         {
@@ -37,49 +36,7 @@ namespace EasyDapper
         private string ParseExpressionInternal(Expression expression, bool useBrackets, Dictionary<ParameterExpression, string> parameterAliases = null)
         {
             if (expression == null) throw new ArgumentNullException("expression");
-            if (parameterAliases == null)
-            {
-                var templateHash = CalculateTemplateHash(expression, useBrackets, parameterAliases);
-                var template = _expressionTemplateCache.GetOrAdd(templateHash,
-                    k => ParseToTemplate(expression, useBrackets, parameterAliases));
-                var constants = ExtractConstants(expression);
-                var sql = template.Sql;
-                if (constants.Count == template.LocalParameterNames.Count)
-                {
-                    for (int i = 0; i < constants.Count; i++)
-                    {
-                        var localName = template.LocalParameterNames[i];
-                        var value = constants[i];
-                        var globalName = _parameterBuilder.GetUniqueParameterName();
-                        _parameterBuilder.AddParameter(globalName, value);
-                        sql = SafeReplaceParameter(sql, localName, globalName);
-                    }
-                    return sql;
-                }
-                else
-                {
-                    return ParseMainLogic(expression, useBrackets, parameterAliases, _parameterBuilder);
-                }
-            }
-            else
-            {
-                return ParseMainLogic(expression, useBrackets, parameterAliases, _parameterBuilder);
-            }
-        }
-
-        private List<object> ExtractConstants(Expression expression)
-        {
-            var extractor = new ConstantExtractor();
-            extractor.Visit(expression);
-            return extractor.Constants;
-        }
-
-        private SqlTemplate ParseToTemplate(Expression expression, bool useBrackets, Dictionary<ParameterExpression, string> parameterAliases)
-        {
-            var tempBuilder = new ParameterBuilder();
-            var sql = ParseMainLogic(expression, useBrackets, parameterAliases, tempBuilder);
-            var paramNames = tempBuilder.GetOrderedParameterNames();
-            return new SqlTemplate { Sql = sql, LocalParameterNames = paramNames };
+            return ParseMainLogic(expression, useBrackets, parameterAliases, _parameterBuilder);
         }
 
         private string ParseMainLogic(Expression expression, bool useBrackets, Dictionary<ParameterExpression, string> parameterAliases, ParameterBuilder paramBuilder)
@@ -500,92 +457,6 @@ namespace EasyDapper
         private string SafeReplaceParameter(string sql, string oldName, string newName)
         {
             return Regex.Replace(sql, @"\b" + Regex.Escape(oldName) + @"\b", newName, RegexOptions.IgnoreCase);
-        }
-
-        private int CalculateTemplateHash(Expression expression, bool useBrackets, Dictionary<ParameterExpression, string> parameterAliases)
-        {
-            if (expression == null) return 0;
-            unchecked
-            {
-                int hash = expression.NodeType.GetHashCode();
-                hash = (hash * 397) ^ useBrackets.GetHashCode();
-                hash = (hash * 397) ^ expression.Type.GetHashCode();
-
-                if (expression is MemberExpression m)
-                {
-                    hash = (hash * 397) ^ m.Member.Name.GetHashCode();
-                    if (m.Expression != null) hash = (hash * 397) ^ CalculateTemplateHash(m.Expression, false, null);
-                }
-                else if (expression is MethodCallExpression mc)
-                {
-                    hash = (hash * 397) ^ mc.Method.Name.GetHashCode();
-                    if (mc.Object != null) hash = (hash * 397) ^ CalculateTemplateHash(mc.Object, false, null);
-                    foreach (var arg in mc.Arguments) hash = (hash * 397) ^ CalculateTemplateHash(arg, false, null);
-                }
-                else if (expression is BinaryExpression b)
-                {
-                    hash = (hash * 397) ^ CalculateTemplateHash(b.Left, false, null);
-                    hash = (hash * 397) ^ CalculateTemplateHash(b.Right, false, null);
-                }
-                else if (expression is UnaryExpression u)
-                {
-                    hash = (hash * 397) ^ CalculateTemplateHash(u.Operand, false, null);
-                }
-                else if (expression is ParameterExpression p)
-                {
-                    if (parameterAliases != null && parameterAliases.TryGetValue(p, out var alias))
-                        hash = (hash * 397) ^ alias.GetHashCode();
-                    else hash = (hash * 397) ^ p.Type.GetHashCode();
-                }
-
-                return hash;
-            }
-        }
-
-        private class ConstantExtractor : ExpressionVisitor
-        {
-            public readonly List<object> Constants = new List<object>();
-
-            private bool IsSimpleType(Type type)
-            {
-                return type.IsValueType || type.IsEnum || type == typeof(string)
-                    || type == typeof(decimal) || type == typeof(DateTime)
-                    || type == typeof(Guid) || type == typeof(byte[]);
-            }
-
-            protected override Expression VisitConstant(ConstantExpression node)
-            {
-                if (node.Value == null || IsSimpleType(node.Value.GetType()))
-                {
-                    Constants.Add(node.Value);
-                }
-                return base.VisitConstant(node);
-            }
-
-            protected override Expression VisitMember(MemberExpression node)
-            {
-                if (node.Expression != null && node.Expression.NodeType == ExpressionType.Constant)
-                {
-                    var obj = ((ConstantExpression)node.Expression).Value;
-                    if (obj != null)
-                    {
-                        var fi = node.Member as FieldInfo;
-                        var pi = node.Member as PropertyInfo;
-
-                        object val = null;
-                        if (fi != null) val = fi.GetValue(obj);
-                        else if (pi != null) val = pi.GetValue(obj, null);
-                        if (val != null && !IsSimpleType(val.GetType()))
-                        {
-                            return node;
-                        }
-
-                        Constants.Add(val);
-                        return node;
-                    }
-                }
-                return base.VisitMember(node);
-            }
         }
 
         public string ParseSelectMember(Expression expression)

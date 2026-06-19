@@ -36,7 +36,7 @@ namespace EasyDapper
             }
         }
 
-        public Dictionary<string, string> MergeParameters(ConcurrentDictionary<string, object> sourceParameters)
+        public Dictionary<string, string> MergeParameters(IDictionary<string, object> sourceParameters)
         {
             var renamings = new Dictionary<string, string>();
             if (sourceParameters == null) return renamings;
@@ -53,7 +53,14 @@ namespace EasyDapper
             return renamings;
         }
 
-        public ConcurrentDictionary<string, object> GetParameters() => _parameters;
+        public IDictionary<string, object> GetParameters()
+        {
+            var snapshot = new Dictionary<string, object>();
+            foreach (var kv in _parameters) snapshot[kv.Key] = kv.Value;
+            return snapshot;
+        }
+
+        internal ConcurrentDictionary<string, object> GetInternalParameters() => _parameters;
 
         public List<string> GetOrderedParameterNames()
         {

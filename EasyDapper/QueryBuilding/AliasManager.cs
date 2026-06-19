@@ -18,6 +18,7 @@ namespace EasyDapper
 
         private int _aliasCounter = 0;
         private int _subQueryCounter = 0;
+        private readonly object _registrationLock = new object();
 
         public string GenerateAlias(string tableName)
         {
@@ -42,23 +43,34 @@ namespace EasyDapper
             if (string.IsNullOrEmpty(tableName) || string.IsNullOrEmpty(alias))
                 throw new ArgumentException("Table name and alias cannot be null or empty.");
 
-            string oldAlias;
-            if (_tableToAlias.TryGetValue(tableName, out oldAlias) && oldAlias != alias)
+            lock (_registrationLock)
             {
-                AliasInfo removed;
-                _allAliases.TryRemove(oldAlias, out removed);
-            }
+                string oldAlias;
+                if (_tableToAlias.TryGetValue(tableName, out oldAlias) && oldAlias != alias)
+                {
+                    AliasInfo removed;
+                    _allAliases.TryRemove(oldAlias, out removed);
+                }
 
-            var newInfo = new AliasInfo { Type = AliasType.Table, Key = tableName };
-            if (!_allAliases.TryAdd(alias, newInfo))
-            {
-                var existingInfo = _allAliases[alias];
-                string existingKeyStr = (existingInfo.Key is string)
-                    ? (string)existingInfo.Key : ((Type)existingInfo.Key).Name;
-                throw new InvalidOperationException("Alias '" + alias + "' is already used by "
-                    + existingInfo.Type.ToString().ToLower() + " '" + existingKeyStr + "'.");
+                var newInfo = new AliasInfo { Type = AliasType.Table, Key = tableName };
+                AliasInfo existingInfo;
+                if (_allAliases.TryGetValue(alias, out existingInfo))
+                {
+                    if (existingInfo.Type == AliasType.Table
+                        && existingInfo.Key is string existingTableName
+                        && existingTableName == tableName)
+                    {
+                        _tableToAlias[tableName] = alias;
+                        return;
+                    }
+                    string existingKeyStr = (existingInfo.Key is string)
+                        ? (string)existingInfo.Key : ((Type)existingInfo.Key).Name;
+                    throw new InvalidOperationException("Alias '" + alias + "' is already used by "
+                        + existingInfo.Type.ToString().ToLower() + " '" + existingKeyStr + "'.");
+                }
+                _allAliases.TryAdd(alias, newInfo);
+                _tableToAlias[tableName] = alias;
             }
-            _tableToAlias.AddOrUpdate(tableName, alias, (k, v) => alias);
         }
 
         public void SetTypeAlias(Type type, string alias)
@@ -66,24 +78,30 @@ namespace EasyDapper
             if (type == null || string.IsNullOrEmpty(alias))
                 throw new ArgumentException("Type and alias cannot be null or empty.");
             var targetTableName = QueryBuilderCache.GetTableName(type);
-            if (_allAliases.TryGetValue(alias, out var existingInfo))
+            lock (_registrationLock)
             {
-                if (existingInfo.Type == AliasType.Table
-                    && existingInfo.Key is string existingTableName
-                    && existingTableName == targetTableName)
+                AliasInfo existingInfo;
+                if (_allAliases.TryGetValue(alias, out existingInfo))
                 {
-                    _typeToAlias.AddOrUpdate(type, alias, (k, v) => alias);
-                    return;
+                    if (existingInfo.Type == AliasType.Table
+                        && existingInfo.Key is string existingTableName
+                        && existingTableName == targetTableName)
+                    {
+                        _typeToAlias[type] = alias;
+                        return;
+                    }
+                    string existingKeyStr = (existingInfo.Key is string)
+                        ? (string)existingInfo.Key : ((Type)existingInfo.Key).Name;
+                    throw new InvalidOperationException("Alias '" + alias + "' is already used by "
+                        + existingInfo.Type.ToString().ToLower() + " '" + existingKeyStr + "'.");
                 }
-                string existingKeyStr = (existingInfo.Key is string)
-                    ? (string)existingInfo.Key : ((Type)existingInfo.Key).Name;
-                throw new InvalidOperationException("Alias '" + alias + "' is already used by "
-                    + existingInfo.Type.ToString().ToLower() + " '" + existingKeyStr + "'.");
-            }
-            else
-            {
-                SetTableAlias(targetTableName, alias);
-                _typeToAlias.AddOrUpdate(type, alias, (k, v) => alias);
+                else
+                {
+                    var newInfo = new AliasInfo { Type = AliasType.Table, Key = targetTableName };
+                    _allAliases.TryAdd(alias, newInfo);
+                    _tableToAlias[targetTableName] = alias;
+                    _typeToAlias[type] = alias;
+                }
             }
         }
 
@@ -91,45 +109,70 @@ namespace EasyDapper
         {
             if (type == null || string.IsNullOrEmpty(alias))
                 throw new ArgumentException("Type and alias cannot be null or empty.");
-            var newInfo = new AliasInfo { Type = AliasType.SubQuery, Key = type };
-            if (!_allAliases.TryAdd(alias, newInfo))
+            lock (_registrationLock)
             {
-                var existingInfo = _allAliases[alias];
-                string existingKeyStr = (existingInfo.Key is string)
-                    ? (string)existingInfo.Key : ((Type)existingInfo.Key).Name;
-                throw new InvalidOperationException("Alias '" + alias + "' is already used by "
-                    + existingInfo.Type.ToString().ToLower() + " '" + existingKeyStr + "'.");
+                var newInfo = new AliasInfo { Type = AliasType.SubQuery, Key = type };
+                AliasInfo existingInfo;
+                if (_allAliases.TryGetValue(alias, out existingInfo))
+                {
+                    if (existingInfo.Type == AliasType.SubQuery
+                        && existingInfo.Key is Type existingType
+                        && existingType == type)
+                    {
+                        _subQueryTypeToAlias[type] = alias;
+                        return;
+                    }
+                    string existingKeyStr = (existingInfo.Key is string)
+                        ? (string)existingInfo.Key : ((Type)existingInfo.Key).Name;
+                    throw new InvalidOperationException("Alias '" + alias + "' is already used by "
+                        + existingInfo.Type.ToString().ToLower() + " '" + existingKeyStr + "'.");
+                }
+                _allAliases.TryAdd(alias, newInfo);
+                _subQueryTypeToAlias[type] = alias;
             }
-            _subQueryTypeToAlias.AddOrUpdate(type, alias, (k, v) => alias);
         }
 
         public string GetAliasForTable(string tableName)
         {
             if (string.IsNullOrWhiteSpace(tableName)) throw new ArgumentNullException("tableName");
 
-            return _tableToAlias.GetOrAdd(tableName, tn =>
+            string existing;
+            if (_tableToAlias.TryGetValue(tableName, out existing)) return existing;
+
+            lock (_registrationLock)
             {
+                if (_tableToAlias.TryGetValue(tableName, out existing)) return existing;
+
                 string newAlias;
                 while (true)
                 {
-                    newAlias = GenerateAlias(tn);
-                    var newInfo = new AliasInfo { Type = AliasType.Table, Key = tn };
+                    newAlias = GenerateAlias(tableName);
+                    var newInfo = new AliasInfo { Type = AliasType.Table, Key = tableName };
                     if (_allAliases.TryAdd(newAlias, newInfo))
                     {
+                        _tableToAlias[tableName] = newAlias;
                         return newAlias;
                     }
                 }
-            });
+            }
         }
 
         public string GetAliasForType(Type type)
         {
             if (type == null) throw new ArgumentNullException("type");
-            return _typeToAlias.GetOrAdd(type, t =>
+
+            string existing;
+            if (_typeToAlias.TryGetValue(type, out existing)) return existing;
+
+            lock (_registrationLock)
             {
-                var tableName = QueryBuilderCache.GetTableName(t);
-                return GetAliasForTable(tableName);
-            });
+                if (_typeToAlias.TryGetValue(type, out existing)) return existing;
+
+                var tableName = QueryBuilderCache.GetTableName(type);
+                var alias = GetAliasForTable(tableName);
+                _typeToAlias[type] = alias;
+                return alias;
+            }
         }
 
         public string GetUniqueAliasForType(Type type)
@@ -140,7 +183,6 @@ namespace EasyDapper
             while (true)
             {
                 newAlias = GenerateAlias(tableName);
-
                 var newInfo = new AliasInfo { Type = AliasType.Table, Key = tableName };
                 if (_allAliases.TryAdd(newAlias, newInfo))
                 {
@@ -164,7 +206,8 @@ namespace EasyDapper
         public bool IsSubqueryAlias(string alias)
         {
             if (string.IsNullOrEmpty(alias)) return false;
-            if (_allAliases.TryGetValue(alias, out var info))
+            AliasInfo info;
+            if (_allAliases.TryGetValue(alias, out info))
             {
                 return info.Type == AliasType.SubQuery;
             }
@@ -175,17 +218,21 @@ namespace EasyDapper
         {
             return _allAliases
                 .Where(kvp => kvp.Value.Type == AliasType.Table)
-                .Select(kvp => new KeyValuePair<string, string>((string)kvp.Value.Key, kvp.Key));
+                .Select(kvp => new KeyValuePair<string, string>((string)kvp.Value.Key, kvp.Key))
+                .ToList();
         }
 
         public void ClearAliases()
         {
-            _allAliases.Clear();
-            _tableToAlias.Clear();
-            _typeToAlias.Clear();
-            _subQueryTypeToAlias.Clear();
-            Interlocked.Exchange(ref _aliasCounter, 0);
-            Interlocked.Exchange(ref _subQueryCounter, 0);
+            lock (_registrationLock)
+            {
+                _allAliases.Clear();
+                _tableToAlias.Clear();
+                _typeToAlias.Clear();
+                _subQueryTypeToAlias.Clear();
+                Interlocked.Exchange(ref _aliasCounter, 0);
+                Interlocked.Exchange(ref _subQueryCounter, 0);
+            }
         }
     }
 }
