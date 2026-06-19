@@ -13,6 +13,13 @@ namespace EasyDapper
         private readonly AliasManager _aliasManager;
         private readonly ParameterBuilder _parameterBuilder;
 
+        private static readonly ConcurrentDictionary<string, Regex> _regexCache = new ConcurrentDictionary<string, Regex>(StringComparer.Ordinal);
+
+        private static Regex GetCachedRegex(string pattern)
+        {
+            return _regexCache.GetOrAdd(pattern, p => new Regex(p, RegexOptions.Compiled | RegexOptions.IgnoreCase));
+        }
+
         public ExpressionParser(AliasManager aliasManager, ParameterBuilder parameterBuilder)
         {
             if (aliasManager == null) throw new ArgumentNullException("aliasManager");
@@ -456,7 +463,8 @@ namespace EasyDapper
 
         private string SafeReplaceParameter(string sql, string oldName, string newName)
         {
-            return Regex.Replace(sql, @"\b" + Regex.Escape(oldName) + @"\b", newName, RegexOptions.IgnoreCase);
+            var regex = GetCachedRegex(@"\b" + Regex.Escape(oldName) + @"\b");
+            return regex.Replace(sql, newName);
         }
 
         public string ParseSelectMember(Expression expression)

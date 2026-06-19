@@ -23,19 +23,26 @@ namespace EasyDapper
         public string GenerateAlias(string tableName)
         {
             if (string.IsNullOrWhiteSpace(tableName)) throw new ArgumentNullException("tableName");
-            var shortName = tableName.Split('.').Last().Trim('[', ']');
-            if (shortName.Length > 10) shortName = shortName.Substring(0, 10);
+            var shortName = ExtractShortName(tableName, 10);
             var counter = Interlocked.Increment(ref _aliasCounter);
-            return string.Format("{0}_A{1}", shortName, counter);
+            return shortName + "_A" + counter.ToString();
         }
 
         public string GenerateSubQueryAlias(string tableName)
         {
             if (string.IsNullOrWhiteSpace(tableName)) throw new ArgumentNullException("tableName");
-            var shortName = tableName.Split('.').Last().Trim('[', ']');
-            if (shortName.Length > 8) shortName = shortName.Substring(0, 8);
+            var shortName = ExtractShortName(tableName, 8);
             var counter = Interlocked.Increment(ref _subQueryCounter);
-            return string.Format("{0}_SQ{1}", shortName, counter);
+            return shortName + "_SQ" + counter.ToString();
+        }
+
+        private static string ExtractShortName(string tableName, int maxLength)
+        {
+            int lastDot = tableName.LastIndexOf('.');
+            string name = lastDot >= 0 ? tableName.Substring(lastDot + 1) : tableName;
+            name = name.Trim('[', ']');
+            if (name.Length > maxLength) name = name.Substring(0, maxLength);
+            return name;
         }
 
         public void SetTableAlias(string tableName, string alias)
