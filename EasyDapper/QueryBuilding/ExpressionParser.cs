@@ -8,19 +8,6 @@ using System.Text.RegularExpressions;
 
 namespace EasyDapper
 {
-    /// <summary>
-    /// Translates LINQ expression trees into SQL fragments. Supports the binary operators
-    /// (<c>==, !=, &gt;, &lt;, &gt;=, &lt;=</c>), logical <c>AND</c>/<c>OR</c>, <c>NOT</c>,
-    /// <c>string.Contains/StartsWith/EndsWith</c> (translated to <c>LIKE</c>),
-    /// <c>IEnumerable.Contains</c> (translated to <c>IN</c>), <c>string.IsNullOrEmpty</c>,
-    /// nullable <c>Value</c>/<c>HasValue</c> access and boolean member access.
-    /// </summary>
-    /// <remarks>
-    /// To improve performance on repeated queries with the same shape, parsed expression
-    /// templates are cached by structural hash. The template stores the SQL skeleton plus the
-    /// ordered list of parameter placeholders; on each invocation only the constant values need
-    /// to be bound to fresh parameter names.
-    /// </remarks>
     internal sealed class ExpressionParser
     {
         private readonly AliasManager _aliasManager;
@@ -770,22 +757,6 @@ namespace EasyDapper
             throw new NotSupportedException("Unsupported expression: " + expression);
         }
 
-        /// <summary>
-        /// Resolves the table alias that should be used to qualify the supplied member access.
-        /// Resolution order:
-        /// 1. If the member's root parameter has an explicit alias mapping (set by AddJoin/AddApply)
-        ///    use that alias.
-        /// 2. Otherwise, if the parameter's CLR type has a registered SubQuery alias (from APPLY)
-        ///    use the SubQuery alias.
-        /// 3. Otherwise, if the parameter's CLR type has a registered type alias (from FROM/JOIN)
-        ///    use that alias.
-        /// 4. Otherwise allocate a fresh alias for the parameter's CLR type.
-        /// </summary>
-        /// <remarks>
-        /// FIX (B12): step 3 now uses <c>paramExpr.Type</c> (the actual lambda parameter type)
-        /// instead of <c>member.Member.DeclaringType</c> (which can be a base class for inherited
-        /// entities and would allocate a spurious alias for the base type).
-        /// </remarks>
         private string GetTableAliasForMember(MemberExpression member, Dictionary<ParameterExpression, string> parameterAliases = null)
         {
             if (member == null) throw new ArgumentNullException("member");

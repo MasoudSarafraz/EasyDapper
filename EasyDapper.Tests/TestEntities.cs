@@ -3,10 +3,6 @@ using EasyDapper.Attributes;
 
 namespace EasyDapper.Tests
 {
-    /// <summary>
-    /// Sample entity used by most query-builder tests. The schema and table name are explicit
-    /// so that tests do not depend on the runtime type name.
-    /// </summary>
     [Table("Person", "dbo")]
     public class Person
     {
@@ -104,9 +100,6 @@ namespace EasyDapper.Tests
         public int Quantity { get; set; }
     }
 
-    /// <summary>
-    /// Entity with a composite primary key, used to exercise composite-key code paths.
-    /// </summary>
     [Table("CompositeEntity", "dbo")]
     public class CompositeEntity
     {
@@ -119,11 +112,6 @@ namespace EasyDapper.Tests
         public string Data { get; set; }
     }
 
-    /// <summary>
-    /// Entity used to verify FIX (B12): the previous code used member.DeclaringType which broke
-    /// for entities that inherit from a generic base. By using paramExpr.Type we now resolve
-    /// aliases using the actual lambda parameter type.
-    /// </summary>
     [Table("DerivedItem", "dbo")]
     public class DerivedItem
     {

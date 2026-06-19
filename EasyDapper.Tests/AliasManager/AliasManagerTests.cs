@@ -3,10 +3,6 @@ using Xunit;
 
 namespace EasyDapper.Tests.AliasManager
 {
-    /// <summary>
-    /// Tests for AliasManager in isolation. Because AliasManager is internal, the test project
-    /// uses InternalsVisibleTo to access it directly.
-    /// </summary>
     public class AliasManagerTests
     {
         private global::EasyDapper.AliasManager CreateManager()
@@ -15,8 +11,6 @@ namespace EasyDapper.Tests.AliasManager
         [Fact]
         public void GenerateAlias_FirstAliasEndsWith_A1_Not_A2()
         {
-            // FIX (B1): previously the first alias was "Foo_A2" because the counter started at 1
-            // and was incremented before use. Now it should be "Foo_A1".
             var manager = CreateManager();
             var alias = manager.GenerateAlias("[dbo].[Foo]");
             Assert.Equal("Foo_A1", alias);
@@ -27,7 +21,7 @@ namespace EasyDapper.Tests.AliasManager
         {
             var manager = CreateManager();
             var alias = manager.GenerateAlias("[dbo].[CustomerOrdersArchive]");
-            // Short name truncated to 10 chars, then suffixed with _A1.
+
             Assert.StartsWith("CustomerOr_A", alias);
             Assert.True(alias.Length <= "CustomerO_A".Length + 5);
         }
@@ -59,19 +53,14 @@ namespace EasyDapper.Tests.AliasManager
             Assert.Contains("person", ex.Message.ToLower());
         }
 
-        /// <summary>
-        /// FIX (C4): when SetTableAlias is called with a new alias for an already-registered
-        /// table, the previously-registered alias must be released from the global registry
-        /// so it can be reused. Previously the old alias leaked forever.
-        /// </summary>
         [Fact]
         public void SetTableAlias_ReplacingAlias_ReleasesOldAliasFromRegistry()
         {
             var manager = CreateManager();
             manager.SetTableAlias("[dbo].[Person]", "p1");
-            // Now switch the alias for the same table.
+
             manager.SetTableAlias("[dbo].[Person]", "p2");
-            // The old alias "p1" should be reusable now.
+
             manager.SetTableAlias("[dbo].[Party]", "p1");
             Assert.Equal("p1", manager.GetAliasForTable("[dbo].[Party]"));
             Assert.Equal("p2", manager.GetAliasForTable("[dbo].[Person]"));
@@ -103,11 +92,6 @@ namespace EasyDapper.Tests.AliasManager
             Assert.Equal(a1, a2);
         }
 
-        /// <summary>
-        /// FIX (C1): the critical Self-Join bug. Calling GetUniqueAliasForType must NOT
-        /// overwrite the type's primary alias. Previously it did, which caused SELECT * to
-        /// emit the JOIN-side alias instead of the FROM-side alias.
-        /// </summary>
         [Fact]
         public void GetUniqueAliasForType_DoesNotOverwriteTypeAlias()
         {
@@ -116,7 +100,7 @@ namespace EasyDapper.Tests.AliasManager
             var uniqueAlias = manager.GetUniqueAliasForType(typeof(Employee));
 
             Assert.NotEqual(primaryAlias, uniqueAlias);
-            // The critical assertion: GetAliasForType must still return the original alias.
+
             Assert.Equal(primaryAlias, manager.GetAliasForType(typeof(Employee)));
         }
 
@@ -169,11 +153,6 @@ namespace EasyDapper.Tests.AliasManager
             Assert.False(manager.IsSubqueryAlias(""));
         }
 
-        /// <summary>
-        /// FIX (B13): GetUniqueAliasForType now registers the alias as AliasType.Table (not
-        /// AliasType.Type). Verify by setting the same alias as a subquery alias and confirming
-        /// IsSubqueryAlias returns false.
-        /// </summary>
         [Fact]
         public void GetUniqueAliasForType_RegistersAsTableAliasNotSubQuery()
         {
@@ -189,7 +168,7 @@ namespace EasyDapper.Tests.AliasManager
             manager.SetTableAlias("[dbo].[Person]", "p1");
             manager.SetSubQueryAlias(typeof(Party), "party_sq1");
             manager.ClearAliases();
-            // After clear, the previously-used alias should be available again.
+
             manager.SetTableAlias("[dbo].[Party]", "p1");
             Assert.Equal("p1", manager.GetAliasForTable("[dbo].[Party]"));
         }

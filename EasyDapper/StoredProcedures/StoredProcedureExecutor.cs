@@ -8,19 +8,11 @@ using Dapper;
 
 namespace EasyDapper
 {
-    /// <summary>
-    /// Executes stored procedures and table-valued/scalar functions on behalf of
-    /// <see cref="DapperService"/>. All object names are validated against a strict allow-list
-    /// regular expression before being interpolated into SQL to prevent injection through
-    /// crafted procedure or function names.
-    /// </summary>
     internal class StoredProcedureExecutor
     {
         private readonly ConnectionManager _connectionManager;
         private readonly SqlBuilder _sqlBuilder;
 
-        // Compiled once and reused: matching a bare identifier or schema.identifier.
-        // `[\w\d_]+` covers letters, digits and underscore (a superset of valid SQL identifiers).
         private static readonly Regex ValidNameRegex =
             new Regex(@"^[\w\d_]+\.[\w\d_]+$|^[\w\d_]+$", RegexOptions.Compiled);
 

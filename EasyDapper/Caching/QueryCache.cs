@@ -8,11 +8,6 @@ using EasyDapper.Attributes;
 
 namespace EasyDapper
 {
-    /// <summary>
-    /// Thread-safe cache for generated SQL statements and entity metadata. Each <see cref="DapperService"/>
-    /// instance owns its own <see cref="QueryCache"/> so cached artifacts are GC-eligible when the service
-    /// is disposed, while still being shared across operations on the same service instance.
-    /// </summary>
     internal class QueryCache : IDisposable
     {
         private readonly SimpleConcurrentCache<Type, string> InsertQueryCache = new SimpleConcurrentCache<Type, string>();
@@ -26,10 +21,6 @@ namespace EasyDapper
         private const string DEFAULT_SCHEMA = "dbo";
         private static readonly char[] InvalidIdentifierChars = new[] { ';', '-', '/', '*', '\'', '"', '[', ']' };
 
-        /// <summary>
-        /// Escapes <c>]</c> as <c>]]</c> (the SQL Server escape sequence) and rejects identifiers
-        /// containing characters that are unsafe to interpolate even inside brackets.
-        /// </summary>
         private string SanitizeIdentifier(string identifier)
         {
             if (string.IsNullOrWhiteSpace(identifier))
@@ -120,7 +111,6 @@ namespace EasyDapper
                 var whereClause = string.Join(" AND ", primaryKeys.Select(p => $"{GetColumnName(p)} = @{p.Name}"));
                 return $"UPDATE {tableName} SET {setClause} WHERE {whereClause}";
             }
-            // All non-PK properties are identities; we can only update the non-identity PKs themselves.
             var updatablePrimaryKeys = primaryKeys.Where(p => !IsIdentity(p)).ToList();
             if (updatablePrimaryKeys.Count == 0)
                 throw new InvalidOperationException($"Cannot update type {type.Name}. All properties are identity primary keys.");

@@ -6,18 +6,12 @@ using System.Linq;
 using System.Linq.Expressions;
 using System.Text;
 using System.Text.RegularExpressions;
+using System.Threading;
 using System.Threading.Tasks;
 using Dapper;
 
 namespace EasyDapper
 {
-    /// <summary>
-    /// The workhorse of the LINQ-style query builder. Accumulates SELECT/WHERE/JOIN/GROUP BY/
-    /// HAVING/ORDER BY/pagination/set-operation clauses and renders them to a SQL string via
-    /// <see cref="BuildQuery"/>. Execution methods (<see cref="Execute"/>, <see cref="ExecuteAsync"/>
-    /// and overloads) run the rendered SQL against the connection supplied at construction time.
-    /// </summary>
-    /// <typeparam name="T">The entity type that the FROM clause targets.</typeparam>
     internal sealed class QueryBuilderCore<T> : IDisposable
     {
         private readonly Lazy<IDbConnection> _lazyConnection;
@@ -45,14 +39,8 @@ namespace EasyDapper
         private readonly object _pagingLock = new object();
         private bool _disposed = false;
 
-        // FIX: keep a reference to the owning ConnectionManager so that the rendered SQL can be
-        // executed against the same IDbTransaction (if any) that the parent DapperService is
-        // using. Without this, queries silently ran outside the active transaction.
         private readonly ConnectionManager _connectionManager;
 
-        // Characters that may not appear in user-supplied custom aliases (with WithTableAlias or
-        // aggregate/row_number alias parameters). Aligned with QueryBuilderCache.InvalidIdentifierChars
-        // so that an alias accepted here is also accepted by the SQL identifier sanitizer.
         private static readonly char[] InvalidAliasChars =
             new[] { ']', '[', ';', '-', '/', '*', '\'', '"', '(', ')', '&', '|', '^', '%', '~',
                     '`', '$', '{', '}', '<', '>', '?', '!', '=', '+', ',', ':', '\\', ' ', '\t', '\n', '\r' };
@@ -71,29 +59,45 @@ namespace EasyDapper
             return "[" + identifier + "]";
         }
 
-        /// <summary>
-        /// Constructs a new builder bound to the supplied connection manager. When
-        /// <paramref name="connectionManager"/> is non-null the builder participates in any
-        /// transaction started on it; otherwise the builder operates against the supplied
-        /// <paramref name="connection"/> with no transaction (legacy mode for callers that
-        /// construct a QueryBuilder directly without a DapperService).
-        /// </summary>
         public QueryBuilderCore(IDbConnection connection, AliasManager aliasManager,
             ParameterBuilder parameterBuilder, ExpressionParser expressionParser,
             bool ownsConnection = false, ConnectionManager connectionManager = null,
             int? commandTimeout = null)
+            : this(aliasManager, parameterBuilder, expressionParser,
+                  connectionManager,
+                  commandTimeout ?? (connection != null ? connection.ConnectionTimeout : 30),
+                  connection)
         {
-            if (connection == null) throw new ArgumentNullException("connection");
-            _lazyConnection = new Lazy<IDbConnection>(() => connection);
-            _aliasManager = aliasManager ?? throw new ArgumentNullException("aliasManager");
-            _parameterBuilder = parameterBuilder ?? throw new ArgumentNullException("parameterBuilder");
-            _expressionParser = expressionParser ?? throw new ArgumentNullException("expressionParser");
+        }
+
+        public QueryBuilderCore(ConnectionManager connectionManager, AliasManager aliasManager,
+            ParameterBuilder parameterBuilder, ExpressionParser expressionParser)
+            : this(aliasManager, parameterBuilder, expressionParser,
+                  connectionManager, connectionManager.CommandTimeout, null)
+        {
+        }
+
+        private QueryBuilderCore(AliasManager aliasManager, ParameterBuilder parameterBuilder,
+            ExpressionParser expressionParser, ConnectionManager connectionManager,
+            int commandTimeout, IDbConnection directConnection)
+        {
+            if (aliasManager == null) throw new ArgumentNullException("aliasManager");
+            if (parameterBuilder == null) throw new ArgumentNullException("parameterBuilder");
+            if (expressionParser == null) throw new ArgumentNullException("expressionParser");
+            _aliasManager = aliasManager;
+            _parameterBuilder = parameterBuilder;
+            _expressionParser = expressionParser;
             _connectionManager = connectionManager;
-            // Prefer the connection manager's timeout (which respects transaction/command config)
-            // and fall back to the connection's ConnectionTimeout, then the optional override.
-            if (connectionManager != null) _timeOut = connectionManager.CommandTimeout;
-            else if (commandTimeout.HasValue) _timeOut = commandTimeout.Value;
-            else _timeOut = connection.ConnectionTimeout;
+            _timeOut = commandTimeout;
+            if (connectionManager != null)
+            {
+                _lazyConnection = new Lazy<IDbConnection>(() => connectionManager.GetOpenConnection(), LazyThreadSafetyMode.ExecutionAndPublication);
+            }
+            else
+            {
+                if (directConnection == null) throw new ArgumentNullException("connection");
+                _lazyConnection = new Lazy<IDbConnection>(() => directConnection, LazyThreadSafetyMode.ExecutionAndPublication);
+            }
             var mainTableName = QueryBuilderCache.GetTableName(typeof(T));
             var mainAlias = _aliasManager.GenerateAlias(mainTableName);
             _aliasManager.SetTableAlias(mainTableName, mainAlias);
@@ -238,9 +242,15 @@ namespace EasyDapper
             if (string.IsNullOrWhiteSpace(applyType)) throw new ArgumentNullException("applyType");
             if (onCondition == null) throw new ArgumentNullException("onCondition");
             if (subBuilder == null) throw new ArgumentNullException("subBuilder");
-            // Sub-query gets its own QueryBuilder (with its own AliasManager) so that alias
-            // scopes do not leak between parent and child queries.
-            var sub = new QueryBuilder<TSubQuery>(_lazyConnection.Value);
+            QueryBuilder<TSubQuery> sub;
+            if (_connectionManager != null)
+            {
+                sub = new QueryBuilder<TSubQuery>(_connectionManager);
+            }
+            else
+            {
+                sub = new QueryBuilder<TSubQuery>(_lazyConnection.Value);
+            }
             var qb = subBuilder(sub);
             if (qb == null) throw new InvalidOperationException("Sub-query builder returned null");
             var subQb = (QueryBuilder<TSubQuery>)qb;
@@ -344,9 +354,6 @@ namespace EasyDapper
             var groupByClause = BuildGroupByClause();
             var havingClause = BuildHavingClause();
             var orderByClause = BuildOrderByClause();
-            // BuildPaginationClause may enqueue a synthetic ORDER BY entry if paging is requested
-            // without an explicit ORDER BY; rebuild orderByClause after that so the synthetic
-            // entry is included in the final SQL.
             var paginationClause = BuildPaginationClause(orderByClause);
             if (string.IsNullOrEmpty(orderByClause) && !string.IsNullOrEmpty(paginationClause))
                 orderByClause = BuildOrderByClause();
@@ -482,9 +489,6 @@ namespace EasyDapper
             return connection;
         }
 
-        /// <summary>
-        /// Returns the active transaction when bound to a ConnectionManager, otherwise null.
-        /// </summary>
         private IDbTransaction GetTransaction()
             => _connectionManager?.CurrentTransaction;
 

@@ -5,6 +5,34 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [4.8.1] - 2026-06-19
+
+### Changed
+
+- **All XML doc comments and inline comments removed from source files.** The library now ships
+  with clean source code; documentation lives in the README and CHANGES.md files instead.
+  Applies to all `.cs` files in both `EasyDapper` and `EasyDapper.Tests` projects.
+
+### Fixed
+
+- **QueryBuilder now opens the connection lazily.** Previously, constructing a QueryBuilder via
+  `DapperService.Query<T>()` immediately opened the underlying SQL connection, even if the caller
+  never called `Execute()` or `ExecuteAsync()`. This could cause connection-pool exhaustion in
+  scenarios that build many queries but only execute some of them. Now the connection is only
+  opened when `Execute`, `ExecuteAsync`, or `BuildQuery`-with-execution is invoked.
+- **QueryBuilderCore constructor refactored** into three overloads: the legacy
+  `(IDbConnection, ...)` constructor, a new `(ConnectionManager, ...)` constructor that
+  participates in the parent service's transaction, and a private canonical constructor that
+  both delegate to.
+- **AddApply (CROSS APPLY / OUTER APPLY) now constructs the sub-query's QueryBuilder via the
+  `ConnectionManager` overload** when one is available, so that the sub-query participates in
+  the same transaction as its parent without eagerly opening a connection.
+
+### Added
+
+- New test `Constructor_DirectConnection_DoesNotOpenConnection` verifying that constructing a
+  `QueryBuilder<T>` with a direct `IDbConnection` does not open the connection.
+
 ## [4.8.0] - 2026-06-19
 
 ### Changed

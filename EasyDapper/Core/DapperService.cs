@@ -7,25 +7,6 @@ using Dapper;
 
 namespace EasyDapper
 {
-    /// <summary>
-    /// Default implementation of <see cref="IDapperService"/>. Acts as a facade over the
-    /// individual collaborator classes (<see cref="ConnectionManager"/>, <see cref="QueryCache"/>,
-    /// <see cref="CrudOperations"/>, <see cref="BulkOperations"/>, <see cref="StoredProcedureExecutor"/>,
-    /// <see cref="EntityTracker"/> and <see cref="SqlBuilder"/>).
-    /// </summary>
-    /// <remarks>
-    /// <para>
-    /// A <see cref="DapperService"/> instance is NOT thread-safe for concurrent use from multiple
-    /// threads because the underlying <see cref="ConnectionManager"/> holds a single physical
-    /// connection and at most one active transaction. Create one service per logical unit of work
-    /// (per HTTP request, per background job, etc.) and dispose it when done.
-    /// </para>
-    /// <para>
-    /// Both constructors accept either a connection string (the service then owns the connection
-    /// lifetime) or an existing <see cref="IDbConnection"/> (the caller retains ownership and is
-    /// responsible for disposing it).
-    /// </para>
-    /// </remarks>
     internal sealed class DapperService : IDapperService, IDisposable
     {
         private readonly ConnectionManager _connectionManager;
@@ -37,10 +18,6 @@ namespace EasyDapper
         private readonly SqlBuilder _sqlBuilder;
         private bool _disposed = false;
 
-        /// <summary>
-        /// Returns the current depth of nested transactions (0 = none, 1 = outermost,
-        /// 2 = one savepoint, etc.). Useful for diagnostic logging.
-        /// </summary>
         public int TransactionCount() => _connectionManager.TransactionCount;
 
         public DapperService(string connectionString)
@@ -102,11 +79,6 @@ namespace EasyDapper
         public T GetById<T>(T entity) where T : class => _crudOperations.GetById(entity);
         public Task<T> GetByIdAsync<T>(T entity) where T : class => _crudOperations.GetByIdAsync(entity);
 
-        /// <summary>
-        /// Starts building a LINQ-style query against <typeparamref name="T"/>. The returned
-        /// builder participates in the current transaction (if any) and uses the same command
-        /// timeout as the rest of this service.
-        /// </summary>
         public IQueryBuilder<T> Query<T>()
             => new QueryBuilder<T>(_connectionManager, _queryCache);
 
