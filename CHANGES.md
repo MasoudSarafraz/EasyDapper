@@ -5,6 +5,88 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [4.8.7] - 2026-06-19
+
+### Performance Improvements
+
+This release addresses several performance hotspots identified during a full audit of the
+library. All optimisations preserve correctness and are covered by the existing 400+ unit
+tests.
+
+- **EntityTracker: static reflection cache for primary key and non-primary-key properties.**
+  Previously, `Attach<T>` and `Detach<T>` called `typeof(T).GetProperties().Where(...)` on
+  every invocation, paying the reflection cost each time. Now the property lists are cached
+  in `static ConcurrentDictionary<Type, List<PropertyInfo>>` so the cost is paid only once
+  per type, per AppDomain. This is the single biggest win for workloads that attach/update
+  many entities (e.g. bulk processing).
+
+- **EntityTracker: `GetChangedProperties` uses cached non-PK property list.** Previously
+  iterated `typeof(T).GetProperties()` and checked each for the `PrimaryKeyAttribute` on
+  every `Update` call. Now uses the cached list and avoids the attribute lookup entirely.
+
+- **EntityTracker: `CreateCompositeKey` pre-allocates array.** Previously used LINQ
+  `Select` + `string.Join` which allocates an `IEnumerable` and a closure. Now pre-allocates
+  a `string[]` and fills it in a plain `for` loop.
+
+- **ParameterBuilder: removed redundant `_orderLock`.** Previously `GetUniqueParameterName`
+  took `_orderLock` and then called `Interlocked.Increment` (which is already thread-safe).
+  The lock + `List<string>` tracking was also redundant with the `ConcurrentDictionary`'s
+  own ordering. Removed both, simplifying the class and eliminating lock contention on
+  the parameter name generation hot path.
+
+- **ParameterBuilder: `GetParameters` uses `Dictionary` constructor.** Previously iterated
+  the `ConcurrentDictionary` manually to build a snapshot. Now uses the `Dictionary`
+  constructor that takes `IDictionary`, which is implemented as a single bulk copy.
+
+- **ParameterBuilder: `GetOrderedParameterNames` no longer takes a lock.** Now simply
+  calls `Keys.ToList()` on the `ConcurrentDictionary`, which is already thread-safe.
+
+- **AliasManager: `GenerateAlias` / `GenerateSubQueryAlias` use `LastIndexOf` instead of
+  `Split('.').Last()`.** Avoids allocating a `string[]` for every alias generation.
+
+- **AliasManager: replaced `string.Format` with string concatenation.** `string.Format`
+  parses the format string and boxes the arguments on every call. Direct concatenation
+  with `+` is faster for the simple 2-argument case used here.
+
+- **ExpressionParser: static `Regex` cache for `SafeReplaceParameter`.** Previously
+  `Regex.Replace` was called with a fresh pattern string on every parameter rename,
+  causing the regex engine to recompile the pattern each time. Now patterns are cached
+  in a `static ConcurrentDictionary<string, Regex>` with `RegexOptions.Compiled`, so
+  each unique pattern is compiled only once and reused across all queries.
+
+- **QueryCache: cache keys are `Type` and `PropertyInfo` instead of `string`.**
+  Previously `GetTableName<T>` built a string key `$"{type.FullName}_{DEFAULT_SCHEMA}"`
+  on every call (even when the result was cached). Now uses `Type` directly as the key,
+  eliminating the string allocation entirely. Same for `GetColumnName` with `PropertyInfo`.
+
+- **QueryCache: replaced string interpolation with concatenation.** `"[{schema}].[{name}]"`
+  was using `$"..."` interpolation which boxes arguments. Direct concatenation avoids
+  the boxing.
+
+- **QueryBuilderCore: merged `_executeLock` into `_stateLock`.** Previously had two
+  separate locks; `_executeLock` was always taken inside `_stateLock`, creating
+  unnecessary contention. Now a single lock is used for all state access.
+
+- **QueryBuilderCore: `Execute` releases lock before database call.** Previously the
+  `lock` was held across the Dapper `Query<T>` call, serialising all reads even though
+  only the SQL building and parameter snapshot need to be serialised. Now the lock is
+  released immediately after the snapshot, allowing concurrent database I/O.
+
+### Added (7 performance benchmark tests, total 407)
+
+`QueryBuilderPerformanceTests` — 7 benchmark tests that assert common operations complete
+within a reasonable time budget:
+- `Benchmark_SimpleWhere_10000Iterations` — 10k simple WHERE queries
+- `Benchmark_JoinQuery_1000Iterations` — 1k queries with 2 JOINs
+- `Benchmark_SelfJoin_1000Iterations` — 1k Self-Join queries
+- `Benchmark_ComplexQuery_1000Iterations` — 1k complex queries (JOIN + GROUP BY + HAVING + ORDER BY + PAGING)
+- `Benchmark_AttachUpdate_1000Iterations` — 1k attach + update + detach cycles
+- `Benchmark_GetById_10000Iterations` — 10k GetById calls
+- `Benchmark_RegexCache_ParameterRename_1000Iterations` — 1k UNION parameter rename cycles
+
+These tests serve as regression guards: if a future change accidentally regresses
+performance, the benchmark will fail.
+
 ## [4.8.6] - 2026-06-19
 
 ### Fixed

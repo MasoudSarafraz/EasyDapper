@@ -8,32 +8,19 @@ namespace EasyDapper
 {
     internal sealed class ParameterBuilder
     {
-        private readonly ConcurrentDictionary<string, object> _parameters = new ConcurrentDictionary<string, object>();
+        private readonly ConcurrentDictionary<string, object> _parameters = new ConcurrentDictionary<string, object>(StringComparer.Ordinal);
         private int _paramCounter = 0;
-
-        private readonly List<string> _orderOfCreation = new List<string>();
-        private readonly object _orderLock = new object();
 
         public string GetUniqueParameterName()
         {
-            lock (_orderLock)
-            {
-                var id = Interlocked.Increment(ref _paramCounter);
-                var name = "@p" + id.ToString();
-                _orderOfCreation.Add(name);
-                return name;
-            }
+            var id = Interlocked.Increment(ref _paramCounter);
+            return "@p" + id.ToString();
         }
 
         public void AddParameter(string name, object value)
         {
             if (string.IsNullOrEmpty(name)) throw new ArgumentNullException("name");
             _parameters[name] = value;
-
-            lock (_orderLock)
-            {
-                if (!_orderOfCreation.Contains(name)) _orderOfCreation.Add(name);
-            }
         }
 
         public Dictionary<string, string> MergeParameters(IDictionary<string, object> sourceParameters)
@@ -55,16 +42,14 @@ namespace EasyDapper
 
         public IDictionary<string, object> GetParameters()
         {
-            var snapshot = new Dictionary<string, object>();
-            foreach (var kv in _parameters) snapshot[kv.Key] = kv.Value;
-            return snapshot;
+            return new Dictionary<string, object>(_parameters, StringComparer.Ordinal);
         }
 
         internal ConcurrentDictionary<string, object> GetInternalParameters() => _parameters;
 
         public List<string> GetOrderedParameterNames()
         {
-            lock (_orderLock) { return _orderOfCreation.ToList(); }
+            return _parameters.Keys.ToList();
         }
     }
 }

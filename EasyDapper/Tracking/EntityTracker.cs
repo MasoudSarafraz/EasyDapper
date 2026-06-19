@@ -12,12 +12,29 @@ namespace EasyDapper
         internal readonly ConcurrentDictionary<object, object> _attachedEntities = new ConcurrentDictionary<object, object>();
         private bool _disposed = false;
 
+        private static readonly ConcurrentDictionary<Type, List<PropertyInfo>> _primaryKeyCache = new ConcurrentDictionary<Type, List<PropertyInfo>>();
+        private static readonly ConcurrentDictionary<Type, List<PropertyInfo>> _nonPrimaryKeyCache = new ConcurrentDictionary<Type, List<PropertyInfo>>();
+
+        private static List<PropertyInfo> GetPrimaryKeyProperties(Type type)
+        {
+            return _primaryKeyCache.GetOrAdd(type, t =>
+                t.GetProperties()
+                    .Where(p => p.GetCustomAttribute<PrimaryKeyAttribute>(true) != null)
+                    .ToList());
+        }
+
+        private static List<PropertyInfo> GetNonPrimaryKeyProperties(Type type)
+        {
+            return _nonPrimaryKeyCache.GetOrAdd(type, t =>
+                t.GetProperties()
+                    .Where(p => p.GetCustomAttribute<PrimaryKeyAttribute>(true) == null)
+                    .ToList());
+        }
+
         public void Attach<T>(T entity) where T : class
         {
             if (entity == null) throw new ArgumentNullException("entity");
-            var primaryKeys = typeof(T).GetProperties()
-                .Where(p => p.GetCustomAttribute<PrimaryKeyAttribute>(true) != null)
-                .ToList();
+            var primaryKeys = GetPrimaryKeyProperties(typeof(T));
             var key = CreateCompositeKey(entity, primaryKeys);
 
             if (!_attachedEntities.ContainsKey(key))
@@ -30,9 +47,7 @@ namespace EasyDapper
         public void Detach<T>(T entity) where T : class
         {
             if (entity == null) throw new ArgumentNullException("entity");
-            var primaryKeys = typeof(T).GetProperties()
-                .Where(p => p.GetCustomAttribute<PrimaryKeyAttribute>(true) != null)
-                .ToList();
+            var primaryKeys = GetPrimaryKeyProperties(typeof(T));
             var key = CreateCompositeKey(entity, primaryKeys);
             object _;
             _attachedEntities.TryRemove(key, out _);
@@ -45,33 +60,38 @@ namespace EasyDapper
             if (primaryKeys.Count == 1)
             {
                 var value = primaryKeys[0].GetValue(entity);
-
                 return primaryKeys[0].Name + ":" + (value ?? "NULL");
             }
-            var parts = primaryKeys.Select(p =>
+            var parts = new string[primaryKeys.Count];
+            for (int i = 0; i < primaryKeys.Count; i++)
             {
+                var p = primaryKeys[i];
                 var v = p.GetValue(entity);
-
-                var vStr = v?.ToString()?.Replace("|", "||") ?? "NULL";
-                return p.Name + "=" + vStr;
-            });
+                var vStr = v != null ? (v.ToString() ?? "").Replace("|", "||") : "NULL";
+                parts[i] = p.Name + "=" + vStr;
+            }
             return string.Join("|", parts);
         }
 
         internal List<string> GetChangedProperties<T>(T original, T current)
         {
-            return typeof(T).GetProperties()
-                .Where(p => p.GetCustomAttribute<PrimaryKeyAttribute>(true) == null
-                            && !AreEqual(p.GetValue(original), p.GetValue(current)))
-                .Select(p => p.Name)
-                .ToList();
+            var props = GetNonPrimaryKeyProperties(typeof(T));
+            var changed = new List<string>(props.Count);
+            for (int i = 0; i < props.Count; i++)
+            {
+                var p = props[i];
+                if (!AreEqual(p.GetValue(original), p.GetValue(current)))
+                {
+                    changed.Add(p.Name);
+                }
+            }
+            return changed;
         }
 
         private static bool AreEqual(object a, object b)
         {
             if (ReferenceEquals(a, b)) return true;
             if (a == null || b == null) return false;
-
             if (a is Array arrA && b is Array arrB)
             {
                 if (arrA.Length != arrB.Length) return false;
@@ -85,7 +105,8 @@ namespace EasyDapper
         private T CloneEntity<T>(T entity)
         {
             var clone = Activator.CreateInstance<T>();
-            foreach (var prop in typeof(T).GetProperties().Where(p => p.CanWrite))
+            var props = typeof(T).GetProperties().Where(p => p.CanWrite).ToList();
+            foreach (var prop in props)
             {
                 var value = prop.GetValue(entity);
                 if (value == null)

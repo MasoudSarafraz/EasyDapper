@@ -40,7 +40,6 @@ namespace EasyDapper
 
         private readonly ConnectionManager _connectionManager;
         private readonly object _stateLock = new object();
-        private readonly object _executeLock = new object();
 
         private static readonly char[] InvalidAliasChars =
             new[] { ']', '[', ';', '-', '/', '*', '\'', '"', '(', ')', '&', '|', '^', '%', '~',
@@ -366,22 +365,34 @@ namespace EasyDapper
 
         public IEnumerable<T> Execute()
         {
-            lock (_executeLock)
+            string query;
+            IDictionary<string, object> parameters;
+            IDbTransaction transaction;
+            int timeout;
+            lock (_stateLock)
             {
-                var query = BuildQuery();
-                return GetOpenConnection().Query<T>(query, _parameterBuilder.GetParameters(),
-                    GetTransaction(), commandTimeout: _timeOut);
+                query = BuildQuery();
+                parameters = _parameterBuilder.GetParameters();
+                transaction = GetTransaction();
+                timeout = _timeOut;
             }
+            return GetOpenConnection().Query<T>(query, parameters, transaction, commandTimeout: timeout);
         }
 
         public IEnumerable<TResult> Execute<TResult>()
         {
-            lock (_executeLock)
+            string query;
+            IDictionary<string, object> parameters;
+            IDbTransaction transaction;
+            int timeout;
+            lock (_stateLock)
             {
-                var query = BuildQuery();
-                return GetOpenConnection().Query<TResult>(query, _parameterBuilder.GetParameters(),
-                    GetTransaction(), commandTimeout: _timeOut);
+                query = BuildQuery();
+                parameters = _parameterBuilder.GetParameters();
+                transaction = GetTransaction();
+                timeout = _timeOut;
             }
+            return GetOpenConnection().Query<TResult>(query, parameters, transaction, commandTimeout: timeout);
         }
 
         public Task<IEnumerable<T>> ExecuteAsync()
@@ -390,7 +401,7 @@ namespace EasyDapper
             IDictionary<string, object> parameters;
             IDbTransaction transaction;
             int timeout;
-            lock (_executeLock)
+            lock (_stateLock)
             {
                 query = BuildQuery();
                 parameters = _parameterBuilder.GetParameters();
@@ -406,7 +417,7 @@ namespace EasyDapper
             IDictionary<string, object> parameters;
             IDbTransaction transaction;
             int timeout;
-            lock (_executeLock)
+            lock (_stateLock)
             {
                 query = BuildQuery();
                 parameters = _parameterBuilder.GetParameters();

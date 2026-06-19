@@ -16,8 +16,8 @@ namespace EasyDapper
         private readonly SimpleConcurrentCache<Type, string> GetByIdQueryCache = new SimpleConcurrentCache<Type, string>();
         private readonly SimpleConcurrentCache<Type, List<PropertyInfo>> PrimaryKeyCache = new SimpleConcurrentCache<Type, List<PropertyInfo>>();
         private readonly SimpleConcurrentCache<Type, PropertyInfo> IdentityPropertyCache = new SimpleConcurrentCache<Type, PropertyInfo>();
-        private readonly SimpleConcurrentCache<string, string> TableNameCache = new SimpleConcurrentCache<string, string>();
-        private readonly SimpleConcurrentCache<string, string> ColumnNameCache = new SimpleConcurrentCache<string, string>();
+        private readonly SimpleConcurrentCache<Type, string> TableNameCache = new SimpleConcurrentCache<Type, string>();
+        private readonly SimpleConcurrentCache<PropertyInfo, string> ColumnNameCache = new SimpleConcurrentCache<PropertyInfo, string>();
         private const string DEFAULT_SCHEMA = "dbo";
         private static readonly char[] InvalidIdentifierChars = new[] { ';', '-', '/', '*', '\'', '"', '[', ']' };
 
@@ -33,28 +33,26 @@ namespace EasyDapper
         public string GetTableName<T>()
         {
             var type = typeof(T);
-            var cacheKey = $"{type.FullName}_{DEFAULT_SCHEMA}";
-            return TableNameCache.GetOrAdd(cacheKey, key =>
+            return TableNameCache.GetOrAdd(type, t =>
             {
-                var tableAttr = type.GetCustomAttribute<TableAttribute>(true);
+                var tableAttr = t.GetCustomAttribute<TableAttribute>(true);
                 var schema = tableAttr != null && !string.IsNullOrWhiteSpace(tableAttr.Schema)
                     ? SanitizeIdentifier(tableAttr.Schema) : DEFAULT_SCHEMA;
                 var name = tableAttr != null && !string.IsNullOrWhiteSpace(tableAttr.TableName)
-                    ? SanitizeIdentifier(tableAttr.TableName) : SanitizeIdentifier(type.Name);
-                return $"[{schema}].[{name}]";
+                    ? SanitizeIdentifier(tableAttr.TableName) : SanitizeIdentifier(t.Name);
+                return "[" + schema + "].[" + name + "]";
             });
         }
 
         public string GetColumnName(PropertyInfo property)
         {
             if (property == null) throw new ArgumentNullException("property");
-            var cacheKey = $"{property.DeclaringType?.FullName}_{property.Name}";
-            return ColumnNameCache.GetOrAdd(cacheKey, key =>
+            return ColumnNameCache.GetOrAdd(property, p =>
             {
-                var columnAttr = property.GetCustomAttribute<ColumnAttribute>(true);
+                var columnAttr = p.GetCustomAttribute<ColumnAttribute>(true);
                 var name = columnAttr != null && !string.IsNullOrWhiteSpace(columnAttr.ColumnName)
-                    ? SanitizeIdentifier(columnAttr.ColumnName) : SanitizeIdentifier(property.Name);
-                return $"[{name}]";
+                    ? SanitizeIdentifier(columnAttr.ColumnName) : SanitizeIdentifier(p.Name);
+                return "[" + name + "]";
             });
         }
 
