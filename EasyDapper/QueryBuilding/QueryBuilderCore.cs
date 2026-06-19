@@ -322,17 +322,40 @@ namespace EasyDapper
         public void Intersect(IQueryBuilder<T> other) => AddSet("INTERSECT", other);
         public void Except(IQueryBuilder<T> other) => AddSet("EXCEPT", other);
 
+        private string _preBuiltOwnSql = null;
+
         private void AddSet(string op, IQueryBuilder<T> other)
         {
             if (string.IsNullOrWhiteSpace(op)) throw new ArgumentNullException("op");
             if (other == null) throw new ArgumentNullException("other");
             var otherQb = (QueryBuilder<T>)other;
-            string sql = otherQb.BuildQuery();
-            var sourceParameters = otherQb.GetParameterBuilder().GetParameters();
-            var renamings = _parameterBuilder.MergeParameters(sourceParameters);
-            foreach (var renaming in renamings) sql = SafeReplaceParameter(sql, renaming.Key, renaming.Value);
 
-            var clause = op + " (" + sql + ")";
+            if (_preBuiltOwnSql == null)
+            {
+                _preBuiltOwnSql = BuildQuery();
+            }
+
+            string otherSql = otherQb.BuildQuery();
+            var otherParams = otherQb.GetParameterBuilder().GetParameters();
+
+            var ownParams = _parameterBuilder.GetParameters();
+            var renamings = new Dictionary<string, string>();
+            foreach (var kv in otherParams)
+            {
+                if (ownParams.ContainsKey(kv.Key))
+                {
+                    var newName = _parameterBuilder.GetUniqueParameterName();
+                    renamings[kv.Key] = newName;
+                }
+            }
+            foreach (var kv in otherParams)
+            {
+                string targetName = renamings.ContainsKey(kv.Key) ? renamings[kv.Key] : kv.Key;
+                _parameterBuilder.AddParameter(targetName, kv.Value);
+            }
+            foreach (var renaming in renamings) otherSql = SafeReplaceParameter(otherSql, renaming.Key, renaming.Value);
+
+            var clause = op + " (" + otherSql + ")";
             lock (_stateLock)
             {
                 if (op.StartsWith("UNION")) _unionClauses.Add(clause);
@@ -401,12 +424,23 @@ namespace EasyDapper
 
         public string GetRawSql()
         {
-            lock (_stateLock) { return BuildQueryLocked(); }
+            return BuildQuery();
         }
 
         internal string BuildQuery()
         {
-            lock (_stateLock) { return BuildQueryLocked(); }
+            lock (_stateLock)
+            {
+                if (_preBuiltOwnSql != null)
+                {
+                    var sb = new StringBuilder(_preBuiltOwnSql);
+                    foreach (var u in _unionClauses) sb.Append(' ').Append(u);
+                    foreach (var i in _intersectClauses) sb.Append(' ').Append(i);
+                    foreach (var e in _exceptClauses) sb.Append(' ').Append(e);
+                    return sb.ToString();
+                }
+                return BuildQueryLocked();
+            }
         }
 
         private string BuildQueryLocked()

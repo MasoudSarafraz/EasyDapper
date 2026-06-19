@@ -109,7 +109,7 @@ namespace EasyDapper.Tests
             IEnumerator IEnumerable.GetEnumerator() => _parameters.GetEnumerator();
         }
 
-        private sealed class EmptyDataReader : IDataReader
+        public sealed class EmptyDataReader : IDataReader
         {
             public int Depth => 0;
             public bool IsClosed => true;
