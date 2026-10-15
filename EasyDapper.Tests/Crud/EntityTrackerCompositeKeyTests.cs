@@ -12,7 +12,7 @@ namespace EasyDapper.Tests.Crud
             => new global::EasyDapper.EntityTracker();
 
         [Fact]
-        public void CreateCompositeKey_SingleColumn_PrefixedWithPropertyName()
+        public void CreateCompositeKey_SingleColumn_DistinguishesKeyValues()
         {
             var tracker = CreateTracker();
             var pks = new List<PropertyInfo>
@@ -21,9 +21,8 @@ namespace EasyDapper.Tests.Crud
             };
             var entity = new Person { Id = 5 };
             var key = tracker.CreateCompositeKey(entity, pks);
-            var keyStr = (string)key;
-            Assert.Contains("Id", keyStr);
-            Assert.Contains("5", keyStr);
+            Assert.NotEqual(key, tracker.CreateCompositeKey(new Person { Id = 6 }, pks));
+            Assert.Equal(key, tracker.CreateCompositeKey(new Person { Id = 5 }, pks));
         }
 
         [Fact]
@@ -40,8 +39,8 @@ namespace EasyDapper.Tests.Crud
 
             var entity2 = new CompositeEntity { Key1 = 1, Key2 = "A||B" };
 
-            var k1 = (string)tracker.CreateCompositeKey(entity1, pks);
-            var k2 = (string)tracker.CreateCompositeKey(entity2, pks);
+            var k1 = tracker.CreateCompositeKey(entity1, pks);
+            var k2 = tracker.CreateCompositeKey(entity2, pks);
 
             Assert.NotEqual(k1, k2);
         }
@@ -66,7 +65,7 @@ namespace EasyDapper.Tests.Crud
         }
 
         [Fact]
-        public void CreateCompositeKey_NullValue_ProducesNullPlaceholder()
+        public void CreateCompositeKey_NullValue_IsDistinctFromLiteralNullString()
         {
             var tracker = CreateTracker();
             var pks = new List<PropertyInfo>
@@ -75,8 +74,8 @@ namespace EasyDapper.Tests.Crud
                 typeof(CompositeEntity).GetProperty("Key2")
             };
             var entity = new CompositeEntity { Key1 = 1, Key2 = null };
-            var key = (string)tracker.CreateCompositeKey(entity, pks);
-            Assert.Contains("NULL", key);
+            var key = tracker.CreateCompositeKey(entity, pks);
+            Assert.NotEqual(key, tracker.CreateCompositeKey(new CompositeEntity { Key1 = 1, Key2 = "NULL" }, pks));
         }
 
         [Fact]

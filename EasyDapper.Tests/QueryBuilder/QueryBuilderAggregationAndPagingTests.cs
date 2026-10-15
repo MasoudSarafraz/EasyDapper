@@ -298,7 +298,7 @@ namespace EasyDapper.Tests.QueryBuilder
             var sql = qb.BuildQuery();
 
             Assert.Contains("SELECT DISTINCT TOP (50)", sql);
-            Assert.Contains("[CurrentFirstName] AS Name", sql);
+            Assert.Contains("[CurrentFirstName] AS [Name]", sql);
             Assert.Contains("WHERE", sql);
             Assert.Contains("AND", sql);
             Assert.Contains("[CurrentFirstName] ASC", sql);

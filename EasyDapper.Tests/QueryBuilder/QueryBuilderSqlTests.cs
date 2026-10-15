@@ -98,10 +98,10 @@ namespace EasyDapper.Tests.QueryBuilder
                 .Select<OrderItem>(oi => oi.Quantity);
             var sql = qb.BuildQuery();
 
-            Assert.Contains("Order_A1.[OrderDate] AS OrderDate", sql);
-            Assert.Contains("Customer_A2.[Name] AS Name", sql);
+            Assert.Contains("Order_A1.[OrderDate] AS [OrderDate]", sql);
+            Assert.Contains("Customer_A2.[Name] AS [Name]", sql);
 
-            Assert.Contains("OrderIte_SQ1.Quantity AS Quantity", sql);
+            Assert.Contains("OrderIte_SQ1.[Quantity] AS [Quantity]", sql);
             Assert.Contains("OUTER APPLY", sql);
         }
 
@@ -332,8 +332,8 @@ namespace EasyDapper.Tests.QueryBuilder
                 .Select(p => p.Name, p => p.Age);
             var sql = qb.BuildQuery();
 
-            Assert.Contains("[CurrentFirstName] AS Name", sql);
-            Assert.Contains("[Age] AS Age", sql);
+            Assert.Contains("[CurrentFirstName] AS [Name]", sql);
+            Assert.Contains("[Age] AS [Age]", sql);
 
             Assert.DoesNotContain("[Id] AS Id", sql);
         }

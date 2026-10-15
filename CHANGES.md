@@ -5,6 +5,84 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- Bind SET/APPLY projected members by column position so duplicate output names,
+  aggregate aliases and ROW_NUMBER cannot silently select or filter another column.
+- Reserve in-flight JOIN aliases across captured getter callbacks; release them on
+  failed translation and preserve committed nested joins and preselected roles.
+- Allow ordered CROSS/OUTER APPLY without TOP or paging by adding OFFSET 0 only
+  to the embedded SQL snapshot; preserve the original child builder.
+- Preserve SQL comments during SET/APPLY parameter import so quotes in comments
+  cannot prevent rebinding later parameters to their own branch values.
+- Execute ordered SET operands through a derived source, including standalone
+  UNION/UNION ALL/INTERSECT/EXCEPT with or without TOP.
+- Terminate trailing line comments before embedding a query or appending OFFSET,
+  parentheses and aliases; keep the consumer's builder reusable.
+- Replace whole-parameter checkpoint copies with per-translation undo journals;
+  preserve committed nested/concurrent writes and rollback ownership on failures.
+- Read ordinary captured instance fields without compiling a lambda for every
+  predicate; retain per-translation evaluation, consumer callback boundaries and
+  the compiled path for properties, methods, static/volatile and special receivers.
+- Preserve consumer getter/setter, lazy iterator and MARS materialization callbacks
+  outside command leases; retain already admitted async connection-opening calls.
+- Accept tracking snapshots from captured written values and actual target-row counts,
+  including triggers and NOCOUNT, while preserving affected-row return values.
+- Preserve native custom parameter binders, Identity metadata, command mutations and
+  output callback timing with the pinned Dapper version and tested Dapper 2 runtimes.
+- Stage query clauses atomically on translation failure, retain nested committed
+  parameters and reset active APPLY role bindings at SET scope transitions.
+- Keep a pending SET transition from changing a predicate's source scope during
+  captured getter evaluation, including reentrant predicate callbacks.
+- Preserve correlated APPLY results when a returned independent builder or callback
+  uses the same source alias; retain the returned builder's SQL and reuse behavior.
+- Ignore quoted text and SQL comments when locating top-level APPLY clauses.
+- Preserve boxed constructor projections and guard internal table alias replacement
+  before it can invalidate committed current-scope SQL references.
+- Keep alias registration atomic on conflicts, refresh canonical type bindings on table
+  alias replacement, and retain distinct role bindings for joins on the same table.
+- Coordinate outer alias reservations and unique generation with ClearAliases; avoid
+  case-only generated collisions in correlated APPLY without renumbering distinct names.
+- Allocate distinct aliases when rejoining the FROM table, preserve existing self-join
+  projections, and rebind preselected distinct CLR roles only after join parsing succeeds.
+- Quote numeric and other delimited alias references consistently while preserving ordinary
+  generated SQL formatting.
+- Preserve the source-row correlation when returning bulk insert identities, including
+  nullable, BIGINT, identity-only entities and mapped column names.
+- Refresh tracked snapshots after successful updates, separate keys by entity type and
+  actual key values, and restore transaction checkpoints on rollback while preserving
+  attachments, partial entities and explicit detach/reattach behavior.
+- Keep GetById parameter names consistent across scalar and entity overloads and quote
+  projection aliases.
+- Use SQL Server-compatible savepoint names and retain savepoints when rollback fails.
+- Coordinate asynchronous connection opening and serialize operations on a service's
+  connection through command completion, transaction completion and disposal, preserving
+  same-service calls from multi-result mappers and consumer parameter callbacks.
+- Retain bulk identity insertion for targets that reject MERGE, without additional metadata
+  permissions; make the ordered fallback atomic on failure and cancellation.
+- Open connections asynchronously for QueryBuilder asynchronous execution.
+- Preserve independent parameters in APPLY and set operations, including later predicates.
+- Apply fluent operations after a set operation to its combined result and preserve the
+  order of mixed set operations.
+- Translate captured null comparisons, negated nullable HasValue and empty collection
+  Contains correctly; escape literal LIKE metacharacters in string searches.
+- Support named parameter containers in SQL function calls and validate parameter names.
+- Update System.Data.SqlClient from 4.8.5 to 4.8.6 to address CVE-2024-0056.
+
+### Added
+
+- A separate, opt-in load harness and repeated binary-only comparison driver for
+  CPU query construction, SQL concurrency, diagnostics and sustained checks.
+- Optional OrderByColumns extension for validated column-only sorting. Existing OrderBy
+  expressions, CustomJoin hints, unnamed aggregate metadata and public interfaces remain
+  compatible; no consumer migration is required.
+- Regression tests for the reported failures and related rollback/cancellation scenarios.
+- Public API baseline checks and compatibility tests for legacy query and callback usage.
+- Opt-in SQL Server integration tests using temporary tables and disposable tempdb objects,
+  enabled by EASYDAPPER_SQL_TEST_CONNECTION.
+
 ## [4.8.7] - 2026-06-19
 
 ### Performance Improvements

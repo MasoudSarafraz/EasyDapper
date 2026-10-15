@@ -35,7 +35,7 @@ namespace EasyDapper.Tests.DapperService
 
                 var sql = spy.LastCommandText;
                 Assert.Contains("INSERT INTO [dbo].[Person]", sql);
-                Assert.Contains("SELECT CAST(SCOPE_IDENTITY() AS INT)", sql);
+                Assert.Contains("SELECT SCOPE_IDENTITY()", sql);
             }
         }
 

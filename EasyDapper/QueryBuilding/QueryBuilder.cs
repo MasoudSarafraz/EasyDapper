@@ -14,20 +14,22 @@ namespace EasyDapper
         private readonly ExpressionParser _expressionParser;
         private bool _disposed = false;
 
-        internal QueryBuilder(IDbConnection connection)
+        internal QueryBuilder(IDbConnection connection, AliasManager outerAliases = null)
         {
             if (connection == null) throw new ArgumentNullException("connection", "Connection cannot be null.");
             _aliasManager = new AliasManager();
+            _aliasManager.ReserveOuterAliases(outerAliases);
             _parameterBuilder = new ParameterBuilder();
             _expressionParser = new ExpressionParser(_aliasManager, _parameterBuilder);
             _core = new QueryBuilderCore<T>(connection, _aliasManager, _parameterBuilder, _expressionParser,
                 ownsConnection: false);
         }
 
-        internal QueryBuilder(ConnectionManager connectionManager, QueryCache queryCache)
+        internal QueryBuilder(ConnectionManager connectionManager, QueryCache queryCache, AliasManager outerAliases = null)
         {
             if (connectionManager == null) throw new ArgumentNullException("connectionManager");
             _aliasManager = new AliasManager();
+            _aliasManager.ReserveOuterAliases(outerAliases);
             _parameterBuilder = new ParameterBuilder();
             _expressionParser = new ExpressionParser(_aliasManager, _parameterBuilder);
             _core = new QueryBuilderCore<T>(connectionManager, _aliasManager,
@@ -43,7 +45,7 @@ namespace EasyDapper
         {
             if (string.IsNullOrEmpty(tableName) || string.IsNullOrEmpty(customAlias))
                 throw new ArgumentNullException("Table name and alias cannot be null or empty.");
-            _aliasManager.SetTableAlias(tableName, customAlias);
+            _core.SetTableAlias(tableName, customAlias);
             return this;
         }
 
@@ -106,6 +108,12 @@ namespace EasyDapper
 
         internal AliasManager GetAliasManager() => _aliasManager;
         internal ParameterBuilder GetParameterBuilder() => _parameterBuilder;
+        internal string GetSourceAlias() => _core.GetSourceAlias(typeof(T));
+        internal IDictionary<string, string> GetOutputColumnBindings(bool forceSetWrapper = false) => _core.GetOutputColumnBindings(forceSetWrapper);
+        internal IDictionary<string, string> GetSourceColumnBindings() => _core.GetSourceColumnBindings();
+        internal IList<string> GetOutputNames(bool forceSetWrapper = false) => _core.GetOutputNames(forceSetWrapper);
+        internal string BuildApplyQuery() => _core.BuildApplyQuery();
+        internal QueryBuilderCore<T>.ApplyQuerySnapshot CaptureApplyQuery() => _core.CaptureApplyQuery();
 
         public void Dispose()
         {

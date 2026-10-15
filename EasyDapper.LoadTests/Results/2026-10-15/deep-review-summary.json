@@ -1,0 +1,366 @@
+{
+  "SchemaVersion": 1,
+  "Date": "2026-10-15",
+  "Review": "Subsequent deep composition review",
+  "CreatedUtc": "2026-10-15T07:26:11.6622415Z",
+  "EvidenceRoot": "G:/EasyDapperDeepReview-20261015",
+  "OriginalCommit": "1957c8a39c66860ba16cb38b35632d581cb0c238",
+  "UncommittedWorkingTree": true,
+  "FixedFindings": [
+    {
+      "Key": "duplicate-output-member-position",
+      "Observed": "SET returned four rows instead of one; APPLY returned parent IDs 1,1,2,3 instead of amounts 7,9,7,5.",
+      "Priority": "P1"
+    },
+    {
+      "Key": "pending-join-alias",
+      "Observed": "JOIN from a captured getter reused an in-flight JOIN alias and SQL Server rejected the duplicate correlation name.",
+      "Priority": "P2"
+    },
+    {
+      "Key": "ordered-apply-without-top",
+      "Observed": "CROSS/OUTER APPLY with ORDER BY and no TOP/OFFSET failed in SQL Server.",
+      "Priority": "P2"
+    }
+  ],
+  "FinalLibraries": [
+    {
+      "Algorithm": "SHA256",
+      "Hash": "13A406D4E9253021945F96C36FDD4DC019215F2AD5EA1BE20171FB6B463D3869",
+      "Path": "G:\\EasyDapperDeepReview-20261015\\final-current\\net45\\EasyDapper.dll"
+    },
+    {
+      "Algorithm": "SHA256",
+      "Hash": "736A6BBFE560114C6AAF63F8FE7D31651808610ABD77A9C832E68AC2A1871EDA",
+      "Path": "G:\\EasyDapperDeepReview-20261015\\final-current\\netstandard2.0\\EasyDapper.dll"
+    }
+  ],
+  "PreviousReviewSourceComparison": [
+    {
+      "Path": "EasyDapper/QueryBuilding/QueryBuilderCore.cs",
+      "Before": "412DB77750BF6F2FBF5DE4D9CFA5F57484E98F79F2AA3D7B34AE5165E40DA3A9",
+      "After": "CC2D08669D51892178C92F79806D70B85A51ED0E344456B62D26C9296FF85AD4",
+      "Unchanged": false
+    },
+    {
+      "Path": "EasyDapper/QueryBuilding/ParameterBuilder.cs",
+      "Before": "C4CC7B845586F8F5927DD16B060C6386EE3962E6301B572F19B151CBCACF1AC3",
+      "After": "C4CC7B845586F8F5927DD16B060C6386EE3962E6301B572F19B151CBCACF1AC3",
+      "Unchanged": true
+    },
+    {
+      "Path": "EasyDapper/QueryBuilding/ExpressionParser.cs",
+      "Before": "995840C0083AA697202C925B4E2DECA5D3EA36059DD566E8808979666A1BBC50",
+      "After": "995840C0083AA697202C925B4E2DECA5D3EA36059DD566E8808979666A1BBC50",
+      "Unchanged": true
+    },
+    {
+      "Path": "EasyDapper/QueryBuilding/AliasManager.cs",
+      "Before": "487A644F1B599C0581327D74133AE5A2C5D05F4E1D3E437CDDD966C3574F8031",
+      "After": "487A644F1B599C0581327D74133AE5A2C5D05F4E1D3E437CDDD966C3574F8031",
+      "Unchanged": true
+    },
+    {
+      "Path": "EasyDapper/Transactions/ConnectionManager.cs",
+      "Before": "8CB6E86B9C9F3DAC18ADF0D10D167C04E18A715552515091424EE52F4CF0D0FC",
+      "After": "8CB6E86B9C9F3DAC18ADF0D10D167C04E18A715552515091424EE52F4CF0D0FC",
+      "Unchanged": true
+    },
+    {
+      "Path": "EasyDapper.Tests/QueryBuilder/SqlParameterLexingRegressionTests.cs",
+      "Before": "F1B2F7C9AB47CECDAF0ADF28BF8C9110600FF3A6AF793464179594F4FFC5D8A9",
+      "After": "F1B2F7C9AB47CECDAF0ADF28BF8C9110600FF3A6AF793464179594F4FFC5D8A9",
+      "Unchanged": true
+    }
+  ],
+  "TestSource": {
+    "Sha256": "60AFA162214C542FECF71E476EE4BB2C4DC8C0AA0E276EEE071651B0884C979D",
+    "Path": "EasyDapper.Tests/QueryBuilder/DeepCompositionRegressionTests.cs"
+  },
+  "Tests": [
+    {
+      "Path": "G:\\EasyDapperDeepReview-20261015\\final-complete-tests\\Masoud_MASOUD-PC_2026-10-15_10_50_05.trx",
+      "Sha256": "F3AABEA515748D3FCFFDDEA66C4AB8CB1C338DB38753338290285ED7B813B7B1",
+      "Total": 758,
+      "Passed": 758,
+      "Failed": 0,
+      "Skipped": 0,
+      "SqlServerCases": 199,
+      "DistinctSqlMethods": 153
+    },
+    {
+      "Path": "G:\\EasyDapperDeepReview-20261015\\final-complete-tests\\Masoud_MASOUD-PC_2026-10-15_10_50_14.trx",
+      "Sha256": "D7AC71C96E43374505E75435052D08BC437FA0BCA401A64DF52752B84CFC8149",
+      "Total": 758,
+      "Passed": 758,
+      "Failed": 0,
+      "Skipped": 0,
+      "SqlServerCases": 199,
+      "DistinctSqlMethods": 153
+    }
+  ],
+  "NewCases": 46,
+  "NewSqlMethods": 10,
+  "WithoutSqlEnvironment": {
+    "Path": "G:\\EasyDapperDeepReview-20261015\\opt-in-without-sql\\Masoud_MASOUD-PC_2026-10-15_10_55_06.trx",
+    "Sha256": "2F35560087201EAA285A253869E9F529145E624E5D91AB20BAF917E6ADA4B121",
+    "Total": 10,
+    "Passed": 0,
+    "Failed": 0,
+    "Skipped": 10
+  },
+  "FrozenRegression": {
+    "ConsumerAfterSha256": "7C1A5F1CDD6D56657FF50D807572C69A7BC788EF52E95418E35CE75CEE6D1ED9",
+    "Before": {
+      "Path": "G:\\EasyDapperDeepReview-20261015\\frozen-current-before-results\\Masoud_MASOUD-PC_2026-10-15_10_51_02.trx",
+      "Sha256": "1DC3D15E34F1BF4BAF262623D3D2E10C5B2F6165401363EC644CFB1A6BFCAD45",
+      "Total": 46,
+      "Passed": 30,
+      "Failed": 16,
+      "Skipped": 0,
+      "FailedCases": [
+        "EasyDapper.Tests.QueryBuilder.DeepCompositionRegressionTests.JoinedSourceOutput_WithMatchingRootMemberAndRowNumberName_PreservesColumnPosition",
+        "EasyDapper.Tests.QueryBuilder.DeepCompositionRegressionTests.OrderedApply_WithoutTop_PreservesCorrelationAndChildReuse(outer: False, paging: False)",
+        "EasyDapper.Tests.QueryBuilder.DeepCompositionRegressionTests.DuplicateProjectionNames_InApply_BindEachMemberToItsOwnColumn(mode: 2)",
+        "EasyDapper.Tests.QueryBuilder.DeepCompositionRegressionTests.ParallelJoinsDuringCapturedGetter_ReserveEveryRoleUntilCommit",
+        "EasyDapper.Tests.QueryBuilder.DeepCompositionRegressionTests.JoinDuringCapturedGetter_AllocatesDistinctAliasesAndPreservesSelectedRole(failingOuter: False, sameThread: False)",
+        "EasyDapper.Tests.QueryBuilder.DeepCompositionRegressionTests.DuplicateProjectionNames_InApply_BindEachMemberToItsOwnColumn(mode: 0)",
+        "EasyDapper.Tests.QueryBuilder.DeepCompositionRegressionTests.RepeatedMemberAndCaseInsensitiveOutputCollision_UseLatestSelectedPosition(caseDifference: False)",
+        "EasyDapper.Tests.QueryBuilder.DeepCompositionRegressionTests.DuplicateProjectionNames_InSet_BindEachMemberToItsOwnColumn(nested: True)",
+        "EasyDapper.Tests.QueryBuilder.DeepCompositionRegressionTests.JoinDuringCapturedGetter_AllocatesDistinctAliasesAndPreservesSelectedRole(failingOuter: False, sameThread: True)",
+        "EasyDapper.Tests.QueryBuilder.DeepCompositionRegressionTests.OrderedApply_WithoutTop_PreservesCorrelationAndChildReuse(outer: True, paging: False)",
+        "EasyDapper.Tests.QueryBuilder.DeepCompositionRegressionTests.DuplicateAggregateAndSelectedNames_WithRowNumber_KeepOutputPositions(rowNumber: False, aggregateLast: False)",
+        "EasyDapper.Tests.QueryBuilder.DeepCompositionRegressionTests.DuplicateProjectionNames_InSet_BindEachMemberToItsOwnColumn(nested: False)",
+        "EasyDapper.Tests.QueryBuilder.DeepCompositionRegressionTests.DuplicateProjectionNames_InApply_BindEachMemberToItsOwnColumn(mode: 1)",
+        "EasyDapper.Tests.QueryBuilder.DeepCompositionRegressionTests.DuplicateAggregateAndSelectedNames_WithRowNumber_KeepOutputPositions(rowNumber: False, aggregateLast: True)",
+        "EasyDapper.Tests.QueryBuilder.DeepCompositionRegressionTests.DuplicateAggregateAndSelectedNames_WithRowNumber_KeepOutputPositions(rowNumber: True, aggregateLast: False)",
+        "EasyDapper.Tests.QueryBuilder.DeepCompositionRegressionTests.DuplicateAggregateAndSelectedNames_WithRowNumber_KeepOutputPositions(rowNumber: True, aggregateLast: True)"
+      ]
+    },
+    "ConsumerSha256": "7C1A5F1CDD6D56657FF50D807572C69A7BC788EF52E95418E35CE75CEE6D1ED9",
+    "RebuiltBetweenRuns": false,
+    "After": {
+      "Path": "G:\\EasyDapperDeepReview-20261015\\frozen-current-after-results\\Masoud_MASOUD-PC_2026-10-15_10_51_10.trx",
+      "Sha256": "67CB98F08A724F9086474A93B38D968D1B5A5C34D9F3D4322E0C8AE250A05DBA",
+      "Total": 46,
+      "Passed": 46,
+      "Failed": 0,
+      "Skipped": 0
+    }
+  },
+  "LegacyAndApi": [
+    {
+      "Runtime": "net462",
+      "BaselineEntries": 85,
+      "CurrentEntries": 87,
+      "RemovedOrChanged": 0,
+      "Additions": 2,
+      "LegacyChecks": 24,
+      "ExitCode": 0,
+      "Log": "G:\\EasyDapperDeepReview-20261015\\compatibility-current\\legacy\\legacy-current-net462.txt"
+    },
+    {
+      "Runtime": "net8.0",
+      "BaselineEntries": 85,
+      "CurrentEntries": 87,
+      "RemovedOrChanged": 0,
+      "Additions": 2,
+      "LegacyChecks": 24,
+      "ExitCode": 0,
+      "Log": "G:\\EasyDapperDeepReview-20261015\\compatibility-current\\legacy\\legacy-current-net8.0.txt"
+    }
+  ],
+  "CapturedRuntime": [
+    {
+      "Case": "net8-2.1.66",
+      "ExitCode": 0,
+      "PassedCases": 16,
+      "FailedCases": 0,
+      "OutputIdenticalToPrevious": true,
+      "LibraryHash": "736A6BBFE560114C6AAF63F8FE7D31651808610ABD77A9C832E68AC2A1871EDA",
+      "ConsumerHash": "B32ADAADE09B42C566311B8E5CDF27CE506BE3427F65EDF3D10F7DD3BCFAC61A",
+      "DapperProductVersion": "2.1.66+bd4f75b512",
+      "Log": "G:\\EasyDapperDeepReview-20261015\\compatibility-current\\captured-runtime\\net8-2.1.66.txt",
+      "ConsumerHashProvenance": "Existing executable hashes captured on Oct12 before cloning/running; no historical Oct10/11 consumer hash was recorded."
+    },
+    {
+      "Case": "net8-2.1.89",
+      "ExitCode": 0,
+      "PassedCases": 16,
+      "FailedCases": 0,
+      "OutputIdenticalToPrevious": true,
+      "LibraryHash": "736A6BBFE560114C6AAF63F8FE7D31651808610ABD77A9C832E68AC2A1871EDA",
+      "ConsumerHash": "4F50BDD13C1B3197540981A551AC5113C6DEDCD603934F96154A7CEB5700465B",
+      "DapperProductVersion": "2.1.89+eb47546a40",
+      "Log": "G:\\EasyDapperDeepReview-20261015\\compatibility-current\\captured-runtime\\net8-2.1.89.txt",
+      "ConsumerHashProvenance": "Existing executable hashes captured on Oct12 before cloning/running; no historical Oct10/11 consumer hash was recorded."
+    },
+    {
+      "Case": "net462-2.1.66",
+      "ExitCode": 0,
+      "PassedCases": 16,
+      "FailedCases": 0,
+      "OutputIdenticalToPrevious": true,
+      "LibraryHash": "13A406D4E9253021945F96C36FDD4DC019215F2AD5EA1BE20171FB6B463D3869",
+      "ConsumerHash": "F45C8A2B1176B3214E06DB7605B3ECFEDC9A920CF01FA6150E5565B3310E4F1A",
+      "DapperProductVersion": "2.1.66+bd4f75b512",
+      "Log": "G:\\EasyDapperDeepReview-20261015\\compatibility-current\\captured-runtime\\net462-2.1.66.txt",
+      "ConsumerHashProvenance": "Existing executable hashes captured on Oct12 before cloning/running; no historical Oct10/11 consumer hash was recorded."
+    },
+    {
+      "Case": "net462-2.1.89",
+      "ExitCode": 0,
+      "PassedCases": 16,
+      "FailedCases": 0,
+      "OutputIdenticalToPrevious": true,
+      "LibraryHash": "13A406D4E9253021945F96C36FDD4DC019215F2AD5EA1BE20171FB6B463D3869",
+      "ConsumerHash": "B5ED7E0101A8EBE534A20F961F0F740FA03C0D0DB8D259B627BB49233F1AC5B0",
+      "DapperProductVersion": "2.1.89+eb47546a40",
+      "Log": "G:\\EasyDapperDeepReview-20261015\\compatibility-current\\captured-runtime\\net462-2.1.89.txt",
+      "ConsumerHashProvenance": "Existing executable hashes captured on Oct12 before cloning/running; no historical Oct10/11 consumer hash was recorded."
+    }
+  ],
+  "IdentityCallbacksAndApply": [
+    {
+      "Case": "identity/net8.0/2.1.66",
+      "ExitCode": 0,
+      "PassedModesOrComparisons": 2,
+      "LibraryHash": "736A6BBFE560114C6AAF63F8FE7D31651808610ABD77A9C832E68AC2A1871EDA",
+      "ConsumerHash": "BAAB6BBC830B00D0C7EAC08FA449D6204984E672F14BDB5CEDCD40E00A66A355",
+      "Log": "G:\\EasyDapperDeepReview-20261015\\compatibility-current\\runtime\\identity-net8.0-dapper-2.1.66.txt"
+    },
+    {
+      "Case": "identity/net8.0/2.1.89",
+      "ExitCode": 0,
+      "PassedModesOrComparisons": 2,
+      "LibraryHash": "736A6BBFE560114C6AAF63F8FE7D31651808610ABD77A9C832E68AC2A1871EDA",
+      "ConsumerHash": "EDF226D66F93F05E0D38C54C2767520621D1E3F9A3C82F565FA2B0AD35C1222D",
+      "Log": "G:\\EasyDapperDeepReview-20261015\\compatibility-current\\runtime\\identity-net8.0-dapper-2.1.89.txt"
+    },
+    {
+      "Case": "identity/net462/2.1.66",
+      "ExitCode": 0,
+      "PassedModesOrComparisons": 2,
+      "LibraryHash": "13A406D4E9253021945F96C36FDD4DC019215F2AD5EA1BE20171FB6B463D3869",
+      "ConsumerHash": "4D0490F16345B061DD05EEBF20E45F5111D5755BC745821F7829F9E29C26E3F6",
+      "Log": "G:\\EasyDapperDeepReview-20261015\\compatibility-current\\runtime\\identity-net462-dapper-2.1.66.txt"
+    },
+    {
+      "Case": "identity/net462/2.1.89",
+      "ExitCode": 0,
+      "PassedModesOrComparisons": 2,
+      "LibraryHash": "13A406D4E9253021945F96C36FDD4DC019215F2AD5EA1BE20171FB6B463D3869",
+      "ConsumerHash": "0BC2464D611147F7B3B192102B2F9FB18D89602C445CAE24D4DF598338339AF0",
+      "Log": "G:\\EasyDapperDeepReview-20261015\\compatibility-current\\runtime\\identity-net462-dapper-2.1.89.txt"
+    },
+    {
+      "Case": "native-callback/net8.0/2.1.66",
+      "ExitCode": 0,
+      "PassedModesOrComparisons": 6,
+      "LibraryHash": "736A6BBFE560114C6AAF63F8FE7D31651808610ABD77A9C832E68AC2A1871EDA",
+      "ConsumerHash": "40B34483956D31278303ABE000A025CE9378D231F2AE6538C9AD84B0E90E0034",
+      "Log": "G:\\EasyDapperDeepReview-20261015\\compatibility-current\\runtime\\native-callback-net8.0-dapper-2.1.66.txt"
+    },
+    {
+      "Case": "native-callback/net8.0/2.1.89",
+      "ExitCode": 0,
+      "PassedModesOrComparisons": 6,
+      "LibraryHash": "736A6BBFE560114C6AAF63F8FE7D31651808610ABD77A9C832E68AC2A1871EDA",
+      "ConsumerHash": "B85CDDD3478CCC25523DD1D610F605F8AF65C546FE5DFFC7601126245974BE0E",
+      "Log": "G:\\EasyDapperDeepReview-20261015\\compatibility-current\\runtime\\native-callback-net8.0-dapper-2.1.89.txt"
+    },
+    {
+      "Case": "native-callback/net462/2.1.66",
+      "ExitCode": 0,
+      "PassedModesOrComparisons": 6,
+      "LibraryHash": "13A406D4E9253021945F96C36FDD4DC019215F2AD5EA1BE20171FB6B463D3869",
+      "ConsumerHash": "F0FA771AC8075DE8AB2F58C00A610C45A5633BB3F223252E793287C9E760BD8D",
+      "Log": "G:\\EasyDapperDeepReview-20261015\\compatibility-current\\runtime\\native-callback-net462-dapper-2.1.66.txt"
+    },
+    {
+      "Case": "native-callback/net462/2.1.89",
+      "ExitCode": 0,
+      "PassedModesOrComparisons": 6,
+      "LibraryHash": "13A406D4E9253021945F96C36FDD4DC019215F2AD5EA1BE20171FB6B463D3869",
+      "ConsumerHash": "0B0F51C0FE4BE170CB49489408B3B5248CDB32D2AD76936B7DFA13D05D57758F",
+      "Log": "G:\\EasyDapperDeepReview-20261015\\compatibility-current\\runtime\\native-callback-net462-dapper-2.1.89.txt"
+    },
+    {
+      "Case": "APPLY/Scope",
+      "ExitCode": 0,
+      "PassedModesOrComparisons": 1,
+      "LibraryHash": "736A6BBFE560114C6AAF63F8FE7D31651808610ABD77A9C832E68AC2A1871EDA",
+      "ConsumerHash": "B2F972479DB2233DCF4103172B8FAB9C958F26A104558BFF46DBC2D020CCA577",
+      "Log": "G:\\EasyDapperDeepReview-20261015\\compatibility-current\\runtime\\apply-Scope.txt"
+    },
+    {
+      "Case": "APPLY/Review",
+      "ExitCode": 0,
+      "PassedModesOrComparisons": 3,
+      "LibraryHash": "736A6BBFE560114C6AAF63F8FE7D31651808610ABD77A9C832E68AC2A1871EDA",
+      "ConsumerHash": "578185CB8741AD4C6CD3EDFAAB1FD6ABAE85F0ED7CA09FDF8A95D495BB92B8C4",
+      "Log": "G:\\EasyDapperDeepReview-20261015\\compatibility-current\\runtime\\apply-Review.txt"
+    }
+  ],
+  "LoadCases": [
+    {
+      "Scenario": "shared-read",
+      "Workers": 256,
+      "WarmupSeconds": 3,
+      "MeasuredSeconds": 20,
+      "MeasuredOperations": 83742,
+      "Errors": 0,
+      "WarmupErrors": 0,
+      "Rows": 4096,
+      "Correctness": true,
+      "WorkersDrained": true,
+      "Cleanup": true,
+      "LibraryHash": "736A6BBFE560114C6AAF63F8FE7D31651808610ABD77A9C832E68AC2A1871EDA",
+      "ConsumerHash": "3E5A179B60052A6DB88E464730A27DD2E75757E0AB575A288698AEBEC6CC5566",
+      "Path": "G:/EasyDapperDeepReview-20261015/load-current/shared-read.json",
+      "Sha256": "0D0B16C27267F695524FBB3C25B0597FED6F38F48FCE8643D62341D1F91F6C62"
+    },
+    {
+      "Scenario": "local-mixed",
+      "Workers": 256,
+      "WarmupSeconds": 3,
+      "MeasuredSeconds": 20,
+      "MeasuredOperations": 459000,
+      "Errors": 0,
+      "WarmupErrors": 0,
+      "Rows": 4096,
+      "Correctness": true,
+      "WorkersDrained": true,
+      "Cleanup": true,
+      "LibraryHash": "736A6BBFE560114C6AAF63F8FE7D31651808610ABD77A9C832E68AC2A1871EDA",
+      "ConsumerHash": "3E5A179B60052A6DB88E464730A27DD2E75757E0AB575A288698AEBEC6CC5566",
+      "Path": "G:/EasyDapperDeepReview-20261015/load-current/local-mixed.json",
+      "Sha256": "B0EFE356FD923EA179A24384C887B88F594209F3E161238132513BABE4791D61"
+    },
+    {
+      "Scenario": "local-query",
+      "Workers": 256,
+      "WarmupSeconds": 3,
+      "MeasuredSeconds": 20,
+      "MeasuredOperations": 33438,
+      "Errors": 0,
+      "WarmupErrors": 0,
+      "Rows": 4096,
+      "Correctness": true,
+      "WorkersDrained": true,
+      "Cleanup": true,
+      "LibraryHash": "736A6BBFE560114C6AAF63F8FE7D31651808610ABD77A9C832E68AC2A1871EDA",
+      "ConsumerHash": "3E5A179B60052A6DB88E464730A27DD2E75757E0AB575A288698AEBEC6CC5566",
+      "Path": "G:/EasyDapperDeepReview-20261015/load-current/local-query.json",
+      "Sha256": "CA11ED29E8673AC559894ECC9356FDEEB4BDC95EE1178749222E35F6608C146E"
+    }
+  ],
+  "LoadOperations": 576180.0,
+  "Limits": [
+    "Framework target ran on installed Framework 4.8.1, not a separate 4.5/4.6.2 installation.",
+    "Pinned Dapper 1.50.2 tests; independent runtime consumers also cover 2.1.66/2.1.89 with retained hash provenance.",
+    "Bounded local SQL2019 workloads do not certify all 3000 consumer applications or production capacity.",
+    "October12 comparative CPU/SQL benchmark was not replayed; earlier same-day load binaries retain separate evidence.",
+    "No public API migration or database migration; no publishing, deployment or commit in this pass."
+  ]
+}

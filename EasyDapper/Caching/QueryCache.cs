@@ -90,12 +90,15 @@ namespace EasyDapper
             var properties = GetInsertProperties<T>();
             var columns = string.Join(", ", properties.Select(GetColumnName));
             var values = string.Join(", ", properties.Select(p => $"@{p.Name}"));
+            var insert = string.IsNullOrEmpty(columns)
+                ? $"INSERT INTO {tableName} DEFAULT VALUES"
+                : $"INSERT INTO {tableName} ({columns}) VALUES ({values})";
             var identityProp = GetIdentityProperty<T>();
             if (identityProp != null)
             {
-                return $"INSERT INTO {tableName} ({columns}) VALUES ({values}); SELECT CAST(SCOPE_IDENTITY() AS INT);";
+                return $"{insert}; SELECT SCOPE_IDENTITY();";
             }
-            return $"INSERT INTO {tableName} ({columns}) VALUES ({values})";
+            return insert;
         }
 
         private string BuildUpdateQuery<T>(Type type)
@@ -133,13 +136,13 @@ namespace EasyDapper
             if (primaryKeys.Count == 1)
             {
                 var pk = primaryKeys.First();
-                whereClause = $"{GetColumnName(pk)} = @Id";
+                whereClause = $"{GetColumnName(pk)} = @{pk.Name}";
             }
             else
             {
                 whereClause = string.Join(" AND ", primaryKeys.Select(pk => $"{GetColumnName(pk)} = @{pk.Name}"));
             }
-            var columns = string.Join(", ", typeof(T).GetProperties().Select(p => $"{GetColumnName(p)} AS {p.Name}"));
+            var columns = string.Join(", ", typeof(T).GetProperties().Select(p => $"{GetColumnName(p)} AS [{p.Name}]"));
             return $"SELECT {columns} FROM {tableName} WHERE {whereClause}";
         }
 

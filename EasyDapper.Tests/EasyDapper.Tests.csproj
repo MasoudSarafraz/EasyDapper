@@ -21,6 +21,8 @@
 
   <ItemGroup>
     <ProjectReference Include="..\EasyDapper\EasyDapper.csproj" />
+    <EmbeddedResource Include="Compatibility\PublicApiBaseline.txt" LogicalName="EasyDapper.Tests.Compatibility.PublicApiBaseline.txt" />
+    <EmbeddedResource Include="Compatibility\PublicApiBaseline.net462.txt" LogicalName="EasyDapper.Tests.Compatibility.PublicApiBaseline.net462.txt" />
   </ItemGroup>
 
 </Project>

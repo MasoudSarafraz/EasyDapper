@@ -185,9 +185,9 @@ namespace EasyDapper.Tests.QueryBuilder
 
             var sql = qb.BuildQuery();
 
-            Assert.Contains("Order_A1.[OrderDate] AS OrderDate", sql);
-            Assert.Contains("Customer_A2.[Name] AS Name", sql);
-            Assert.Contains("Product_A3.[Price] AS Price", sql);
+            Assert.Contains("Order_A1.[OrderDate] AS [OrderDate]", sql);
+            Assert.Contains("Customer_A2.[Name] AS [Name]", sql);
+            Assert.Contains("Product_A3.[Price] AS [Price]", sql);
         }
 
         [Fact]

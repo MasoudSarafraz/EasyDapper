@@ -1,10 +1,13 @@
 using System;
-using System.Collections.Concurrent;
+using System.Collections.Generic;
 using System.Data;
 using System.Data.Common;
 using System.Data.SqlClient;
 using System.Threading;
 using System.Threading.Tasks;
+#if NET45
+using System.Runtime.Remoting.Messaging;
+#endif
 
 namespace EasyDapper
 {
@@ -14,12 +17,32 @@ namespace EasyDapper
         private readonly IDbConnection _externalConnection;
         private IDbConnection _connection;
         private IDbTransaction _transaction;
-        private readonly ConcurrentStack<string> _savePointStack = new ConcurrentStack<string>();
+        private readonly Stack<string> _savePointStack = new Stack<string>();
         private readonly int _timeOut;
         private const int DEFAULT_TIMEOUT = 30;
-        private bool _disposed = false;
+        private bool _disposed;
         private readonly object _lock = new object();
-        private readonly object _connectionOpenLock = new object();
+        private readonly SemaphoreSlim _connectionOpenGate = new SemaphoreSlim(1, 1);
+        private readonly SemaphoreSlim _operationGate = new SemaphoreSlim(1, 1);
+#if NET45
+        private readonly string _operationContextKey = "EasyDapper.Operation." + Guid.NewGuid().ToString("N");
+#else
+        private readonly AsyncLocal<OperationLease> _operationContext = new AsyncLocal<OperationLease>();
+#endif
+
+        internal event Action TrackingInvalidated;
+        internal event Action TransactionStarted;
+        internal event Action TransactionCommitted;
+        internal event Action TransactionRolledBack;
+
+        internal bool HasCurrentOperation
+        {
+            get
+            {
+                var operation = GetOperationContext();
+                return operation != null && !operation.IsReleased;
+            }
+        }
 
         public int TransactionCount
         {
@@ -27,28 +50,21 @@ namespace EasyDapper
             {
                 lock (_lock)
                 {
-                    if (_transaction == null) return 0;
-                    return 1 + _savePointStack.Count;
+                    return _transaction == null ? 0 : 1 + _savePointStack.Count;
                 }
             }
         }
 
         public IDbTransaction CurrentTransaction
         {
-            get
-            {
-                lock (_lock) { return _transaction; }
-            }
+            get { lock (_lock) { return _transaction; } }
         }
 
         public int CommandTimeout => _timeOut;
 
         public bool IsDisposed
         {
-            get
-            {
-                lock (_lock) { return _disposed; }
-            }
+            get { lock (_lock) { return _disposed; } }
         }
 
         public ConnectionManager(string connectionString)
@@ -72,10 +88,7 @@ namespace EasyDapper
                 var builder = new SqlConnectionStringBuilder(_connectionString);
                 return builder.ConnectTimeout > 0 ? builder.ConnectTimeout : DEFAULT_TIMEOUT;
             }
-            catch
-            {
-                return DEFAULT_TIMEOUT;
-            }
+            catch { return DEFAULT_TIMEOUT; }
         }
 
         private int GetExternalConnectionTimeout()
@@ -89,127 +102,288 @@ namespace EasyDapper
             if (_disposed) throw new ObjectDisposedException(nameof(ConnectionManager));
         }
 
+        // Normal operations hold a lease until command execution and buffering finish.
+        // Multi-result callbacks take responsibility for their reader's lifetime.
+        public IDisposable AcquireOperation()
+        {
+            return AcquireOperation(false);
+        }
+
+        private IDisposable AcquireOperation(bool allowDisposed)
+        {
+            var lease = CreateOperationLease(allowDisposed);
+            try
+            {
+                lease.Wait();
+                lease.MarkEntered();
+                if (!allowDisposed) lock (_lock) { ThrowIfDisposed(); }
+                return lease;
+            }
+            catch
+            {
+                lease.Dispose();
+                throw;
+            }
+        }
+
+        // This entry point is synchronous so ownership belongs to its caller
+        // and follows that caller across the await of the returned task.
+        public Task<IDisposable> AcquireOperationAsync(CancellationToken cancellationToken = default)
+        {
+            var lease = CreateOperationLease(false);
+            return WaitForOperationAsync(lease, cancellationToken);
+        }
+
+        internal IDisposable AcquirePreparedOperation() => AcquireOperation(true);
+
+        internal Task<IDisposable> AcquirePreparedOperationAsync(CancellationToken cancellationToken)
+        {
+            var lease = CreateOperationLease(true);
+            return WaitForOperationAsync(lease, cancellationToken, true);
+        }
+
+        internal void ReleaseOperationForCallback()
+        {
+            GetOperationContext()?.Dispose();
+        }
+
+        private async Task<IDisposable> WaitForOperationAsync(OperationLease lease, CancellationToken cancellationToken,
+            bool allowDisposed = false)
+        {
+            try
+            {
+                await lease.WaitAsync(cancellationToken).ConfigureAwait(false);
+                lease.MarkEntered();
+                if (!allowDisposed) lock (_lock) { ThrowIfDisposed(); }
+                return lease;
+            }
+            catch
+            {
+                lease.Dispose();
+                throw;
+            }
+        }
+
+        private OperationLease CreateOperationLease(bool allowDisposed)
+        {
+            if (!allowDisposed) lock (_lock) { ThrowIfDisposed(); }
+            var parent = GetOperationContext();
+            if (parent == null || !parent.TryReserveChild()) parent = null;
+            var lease = new OperationLease(this, parent);
+            SetOperationContext(lease);
+            return lease;
+        }
+
+        private OperationLease GetOperationContext()
+        {
+#if NET45
+            return CallContext.LogicalGetData(_operationContextKey) as OperationLease;
+#else
+            return _operationContext.Value;
+#endif
+        }
+
+        private void SetOperationContext(OperationLease lease)
+        {
+#if NET45
+            if (lease == null) CallContext.FreeNamedDataSlot(_operationContextKey);
+            else CallContext.LogicalSetData(_operationContextKey, lease);
+#else
+            _operationContext.Value = lease;
+#endif
+        }
+
+        private sealed class OperationLease : MarshalByRefObject, IDisposable
+        {
+            private readonly ConnectionManager _owner;
+            private readonly OperationLease _parent;
+            private readonly object _stateLock = new object();
+            private readonly SemaphoreSlim _childGate = new SemaphoreSlim(1, 1);
+            private int _references = 1;
+            private int _entered;
+            private int _released;
+
+            public OperationLease(ConnectionManager owner, OperationLease parent)
+            {
+                _owner = owner;
+                _parent = parent;
+            }
+
+            public bool IsReleased => Volatile.Read(ref _released) != 0;
+            public bool HasParent => _parent != null;
+            private SemaphoreSlim Gate => _parent == null ? _owner._operationGate : _parent._childGate;
+            public void Wait() { Gate.Wait(); }
+            public Task WaitAsync(CancellationToken cancellationToken) => Gate.WaitAsync(cancellationToken);
+            public void MarkEntered() { Volatile.Write(ref _entered, 1); }
+
+            public bool TryReserveChild()
+            {
+                lock (_stateLock)
+                {
+                    if (_released != 0 || Volatile.Read(ref _entered) == 0) return false;
+                    Interlocked.Increment(ref _references);
+                    return true;
+                }
+            }
+
+            public void Dispose()
+            {
+                if (ReferenceEquals(_owner.GetOperationContext(), this))
+                    _owner.SetOperationContext(_parent != null && !_parent.IsReleased ? _parent : null);
+                lock (_stateLock)
+                {
+                    if (_released != 0) return;
+                    Volatile.Write(ref _released, 1);
+                }
+                ReleaseReference();
+            }
+
+            private void ReleaseReference()
+            {
+                if (Interlocked.Decrement(ref _references) != 0) return;
+                if (Volatile.Read(ref _entered) != 0) Gate.Release();
+                _parent?.ReleaseReference();
+            }
+        }
+
+        private IDbConnection GetConnection()
+        {
+            lock (_lock)
+            {
+                ThrowIfDisposed();
+                if (_externalConnection != null) return _externalConnection;
+                return _connection ?? (_connection = new SqlConnection(_connectionString));
+            }
+        }
+
         public IDbConnection GetOpenConnection()
         {
-            lock (_lock)
+            var existing = GetConnection();
+            if (existing.State == ConnectionState.Open) return existing;
+            _connectionOpenGate.Wait();
+            try
             {
-                ThrowIfDisposed();
-                if (_externalConnection != null)
-                {
-                    EnsureExternalConnectionOpen(_externalConnection);
-                    return _externalConnection;
-                }
-                if (_connection == null) _connection = new SqlConnection(_connectionString);
-                EnsureConnectionOpen();
-                return _connection;
+                var connection = GetConnection();
+                PrepareConnectionForOpen(connection);
+                if (connection.State != ConnectionState.Open) connection.Open();
+                EnsureConnectionIsOpen(connection);
+                return connection;
             }
+            finally { _connectionOpenGate.Release(); }
         }
 
-        public async Task<IDbConnection> GetOpenConnectionAsync()
+        public async Task<IDbConnection> GetOpenConnectionAsync(CancellationToken cancellationToken = default)
         {
-            IDbConnection conn;
-            lock (_lock)
+            cancellationToken.ThrowIfCancellationRequested();
+            var existing = GetConnection();
+            if (existing.State == ConnectionState.Open) return existing;
+            await _connectionOpenGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+            try
             {
-                ThrowIfDisposed();
-                if (_externalConnection != null)
+                var connection = GetConnection();
+                PrepareConnectionForOpen(connection);
+                if (connection.State != ConnectionState.Open)
                 {
-                    conn = _externalConnection;
-                }
-                else
-                {
-                    if (_connection == null) _connection = new SqlConnection(_connectionString);
-                    conn = _connection;
-                }
-            }
-
-            if (conn.State != ConnectionState.Open && conn.State != ConnectionState.Connecting)
-            {
-                var externalAsync = conn as DbConnection;
-                if (externalAsync != null)
-                {
-                    await externalAsync.OpenAsync().ConfigureAwait(false);
-                }
-                else
-                {
-                    lock (_connectionOpenLock)
+                    if (connection is DbConnection asyncConnection)
+                        await asyncConnection.OpenAsync(cancellationToken).ConfigureAwait(false);
+                    else
                     {
-                        if (conn.State != ConnectionState.Open) conn.Open();
+                        cancellationToken.ThrowIfCancellationRequested();
+                        connection.Open();
                     }
                 }
+                EnsureConnectionIsOpen(connection);
+                return connection;
             }
-            return conn;
+            finally { _connectionOpenGate.Release(); }
         }
 
-        private void EnsureExternalConnectionOpen(IDbConnection connection)
+        private static void PrepareConnectionForOpen(IDbConnection connection)
         {
-            if (connection.State == ConnectionState.Broken)
-            {
-                connection.Close();
-                connection.Open();
-            }
-            else if (connection.State != ConnectionState.Open && connection.State != ConnectionState.Connecting)
-            {
-                connection.Open();
-            }
+            if (connection.State == ConnectionState.Broken) connection.Close();
+            if (connection.State == ConnectionState.Connecting)
+                throw new InvalidOperationException("The connection is being opened outside this EasyDapper service.");
         }
 
-        private void EnsureConnectionOpen()
+        private static void EnsureConnectionIsOpen(IDbConnection connection)
         {
-            if (_connection.State == ConnectionState.Broken)
-            {
-                _connection.Close();
-                _connection.Open();
-            }
-            else if (_connection.State != ConnectionState.Open && _connection.State != ConnectionState.Connecting)
-            {
-                _connection.Open();
-            }
+            if (connection.State != ConnectionState.Open)
+                throw new InvalidOperationException("The connection did not reach the Open state.");
         }
 
         public void BeginTransaction()
         {
-            lock (_lock)
+            using (AcquireOperation())
             {
-                ThrowIfDisposed();
                 var connection = GetOpenConnection();
-                if (_transaction != null)
+                lock (_lock)
                 {
-                    var savePointName = $"SP_{Guid.NewGuid():N}";
-                    ExecuteTransactionCommand($"SAVE TRANSACTION {savePointName}");
-                    _savePointStack.Push(savePointName);
-                }
-                else
-                {
-                    _transaction = connection.BeginTransaction();
+                    if (_transaction != null)
+                    {
+                        // A SQL Server savepoint identifier is limited to 32 characters.
+                        var savePointName = "SP_" + Guid.NewGuid().ToString("N").Substring(0, 29);
+                        ExecuteTransactionCommand($"SAVE TRANSACTION {savePointName}");
+                        _savePointStack.Push(savePointName);
+                    }
+                    else { _transaction = connection.BeginTransaction(); }
+                    TransactionStarted?.Invoke();
                 }
             }
         }
 
         public void CommitTransaction()
         {
+            using (AcquireOperation())
             lock (_lock)
             {
-                ThrowIfDisposed();
                 if (_transaction == null) throw new InvalidOperationException("No transaction is in progress");
-                if (_savePointStack.TryPop(out var _)) return;
-                try { _transaction.Commit(); }
-                finally { CleanupTransaction(); }
+                if (_savePointStack.Count != 0)
+                {
+                    _savePointStack.Pop();
+                    TransactionCommitted?.Invoke();
+                    return;
+                }
+                var committed = false;
+                try
+                {
+                    _transaction.Commit();
+                    committed = true;
+                }
+                finally
+                {
+                    CleanupTransaction();
+                    if (!committed) TrackingInvalidated?.Invoke();
+                }
+                TransactionCommitted?.Invoke();
             }
         }
 
         public void RollbackTransaction()
         {
+            using (AcquireOperation())
             lock (_lock)
             {
-                ThrowIfDisposed();
                 if (_transaction == null) throw new InvalidOperationException("No transaction is in progress");
-                if (_savePointStack.TryPop(out var savePointName))
+                if (_savePointStack.Count != 0)
                 {
+                    var savePointName = _savePointStack.Peek();
                     ExecuteTransactionCommand($"ROLLBACK TRANSACTION {savePointName}");
+                    _savePointStack.Pop();
+                    TransactionRolledBack?.Invoke();
                     return;
                 }
-                try { _transaction.Rollback(); }
-                finally { CleanupTransaction(); }
+                var rolledBack = false;
+                try
+                {
+                    _transaction.Rollback();
+                    rolledBack = true;
+                }
+                finally
+                {
+                    CleanupTransaction();
+                    if (!rolledBack) TrackingInvalidated?.Invoke();
+                }
+                TransactionRolledBack?.Invoke();
             }
         }
 
@@ -227,13 +401,8 @@ namespace EasyDapper
 
         private void CleanupTransaction()
         {
-            try
-            {
-                _transaction?.Dispose();
-            }
-            catch
-            {
-            }
+            try { _transaction?.Dispose(); }
+            catch { }
             _transaction = null;
             _savePointStack.Clear();
         }
@@ -246,42 +415,39 @@ namespace EasyDapper
 
         protected virtual void Dispose(bool disposing)
         {
-            lock (_lock)
+            lock (_lock) { if (_disposed) return; }
+            using (AcquireOperation(true))
             {
-                if (_disposed) return;
-                _disposed = true;
-
-                if (!disposing) return;
-
-                if (_transaction != null)
+                var currentOperation = GetOperationContext();
+                var openingCallback = _externalConnection != null ||
+                    currentOperation != null && currentOperation.HasParent && _connection?.State == ConnectionState.Open;
+                var enteredOpenGate = !openingCallback;
+                if (enteredOpenGate) _connectionOpenGate.Wait();
+                try
                 {
-                    try { _transaction.Rollback(); }
-                    catch
+                    lock (_lock)
                     {
+                        if (_disposed) return;
+                        _disposed = true;
+                        if (!disposing) return;
+                        if (_transaction != null)
+                        {
+                            try { _transaction.Rollback(); }
+                            catch { }
+                            CleanupTransaction();
+                            TrackingInvalidated?.Invoke();
+                        }
+                        if (_connection != null)
+                        {
+                            try { _connection.Close(); }
+                            catch { }
+                            try { _connection.Dispose(); }
+                            catch { }
+                            _connection = null;
+                        }
                     }
-                    try { _transaction.Dispose(); }
-                    catch
-                    {
-                    }
-                    _transaction = null;
-                    _savePointStack.Clear();
                 }
-
-                if (_connection != null && _connection != _externalConnection)
-                {
-                    try
-                    {
-                        if (_connection.State == ConnectionState.Open) _connection.Close();
-                    }
-                    catch
-                    {
-                    }
-                    try { _connection.Dispose(); }
-                    catch
-                    {
-                    }
-                    _connection = null;
-                }
+                finally { if (enteredOpenGate) _connectionOpenGate.Release(); }
             }
         }
     }

@@ -180,6 +180,10 @@ dapperService.Update(entity);
 dapperService.Detach(entity);
 ```
 
+Successful updates refresh the tracked snapshot. Rolling back a transaction or savepoint
+restores its previous tracked snapshots and preserves attached entities, including partial
+entities. Existing `Attach`, `Update` and `Detach` usage does not need to change.
+
 ### Stored Procedures
 
 ```csharp
@@ -309,6 +313,11 @@ var order3 = dapperService.Query<Goods>()
 .OrderBy("Name ASC, GoodsCode DESC")
 .Execute();
 ```
+
+`OrderBy(string)` and `CustomJoin` continue to accept trusted SQL text, including expressions
+and join hints. Never pass untrusted input directly to these methods. For mapped properties,
+use `OrderByAscending` or `OrderByDescending`. The optional `OrderByColumns(string)` extension
+validates comma-separated column identifiers and directions when that restriction is useful.
 ### Joins
 
 ```csharp
@@ -377,6 +386,65 @@ var result = dapperService.Query<Person>();
 var result2 = dapperService.Query<Person>().Where(x=> x.Age > 10);
 var res = result.Union(result2).Execute();
 ```
+
+Methods chained after `Union`, `UnionAll`, `Intersect` or `Except` operate on the combined
+result. For example, `first.Union(second).Where(...).OrderByAscending(...).Paging(...)`
+filters and pages that result. Each branch must select compatible columns; later predicates
+and projections can refer only to columns present in those branches. References to omitted
+members are rejected. Renamed projections retain their member bindings. Standalone aggregates
+and unmodified set queries preserve their existing result-column names. Internal column names
+are introduced only when a combined result needs a derived table for later operations.
+
+## Connection and concurrency behavior
+
+Operations on a service's shared connection are serialized, including asynchronous calls,
+query builders and transaction completion. This supports concurrent callers without requiring
+Multiple Active Result Sets. A transaction belongs to the service instance; use separate
+instances for independent transaction workflows.
+
+Multi-result mapper callbacks retain control of their reader and can call the same service.
+As before, consume the reader before another command when Multiple Active Result Sets is
+disabled; with MARS enabled, a follow-up command can run while the reader remains active.
+Consumer parameter getters, custom binders and completion callbacks execute outside the
+command lease. CRUD list iteration and generated identity setters also execute outside
+that lease. With MARS enabled, result constructors and setters can call the same service
+while its reader remains active; the SQL Server restrictions on concurrent readers still
+apply when MARS is disabled.
+
+SQL function arguments are positional. Supply anonymous-object properties or
+`DynamicParameters` entries in the function's declared argument order; parameter names do
+not reorder SQL function arguments. For a parameter bag combining anonymous templates and
+explicit entries, templates bind first and additional explicit entries follow. Dictionary
+arguments follow the dictionary's enumeration order.
+
+## Running tests
+
+Run `dotnet test EasyDapper.sln --configuration Release` for the unit tests on both supported
+test targets. SQL Server regression tests are opt-in: set `EASYDAPPER_SQL_TEST_CONNECTION` to
+a connection string and run the same command. Tests exercise bulk identity mapping,
+transactions, tracking, query semantics, asynchronous opening and concurrent calls. They use
+temporary tables and uniquely named disposable objects in `tempdb`, with cleanup; the latter
+tests require permission to create their test schemas, users, rules and triggers in `tempdb`.
+No application tables are modified.
+
+The full system and binary compatibility results are recorded in
+[SYSTEM_INTEGRITY_REVIEW.md](SYSTEM_INTEGRITY_REVIEW.md) and
+[COMPATIBILITY_VALIDATION.md](COMPATIBILITY_VALIDATION.md).
+The latest deep review, additional regression fixes and final binary checks are in
+[DEEP_REVIEW_2026_10_15.md](DEEP_REVIEW_2026_10_15.md). The earlier same-day review
+is retained in [REVIEW_2026_10_15.md](REVIEW_2026_10_15.md).
+
+## Load measurements
+
+The optional [load harness](EasyDapper.LoadTests/README.md) runs outside the library
+and the normal test solution. It measures query construction separately from SQL
+execution, with shared and independent connection scenarios. Consumer APIs and
+connection/transaction ownership are unchanged. Measurement boundaries are defined
+in [PERFORMANCE_MEASUREMENT_NOTES.md](PERFORMANCE_MEASUREMENT_NOTES.md); the recorded
+construction results are in [CPU_QUERY_BUILD_RESULTS.md](CPU_QUERY_BUILD_RESULTS.md).
+The combined SQL, correctness and binary compatibility results are recorded in
+[HIGH_LOAD_VALIDATION.md](HIGH_LOAD_VALIDATION.md).
+
 ## Complex Query Example
 
 ```csharp

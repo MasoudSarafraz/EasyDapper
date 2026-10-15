@@ -42,7 +42,7 @@ namespace EasyDapper.Tests.QueryCache
             var query = cache.GetInsertQuery<Person>();
             Assert.Contains("INSERT INTO [dbo].[Person]", query);
             Assert.Contains("VALUES", query);
-            Assert.Contains("SELECT CAST(SCOPE_IDENTITY() AS INT)", query);
+            Assert.Contains("SELECT SCOPE_IDENTITY()", query);
             Assert.DoesNotContain("[Id]", query.Split(new[] { "VALUES" }, StringSplitOptions.None)[0]);
         }
 

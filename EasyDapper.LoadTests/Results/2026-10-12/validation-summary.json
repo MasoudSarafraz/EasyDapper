@@ -1,0 +1,754 @@
+{
+  "SchemaVersion": 1,
+  "CreatedUtc": "2026-10-12T18:26:24.6053370Z",
+  "EvidenceRoot": "C:/Users/Masoud/AppData/Local/Temp/EasyDapperHighLoad-20261012",
+  "OriginalCommit": "1957c8a39c66860ba16cb38b35632d581cb0c238",
+  "WorkingTreeContainsUncommittedChanges": true,
+  "LibraryHashes": {
+    "net45": "A10FCC656792D8E950F04A2B0CCEE69BC5C3611026BCB7B85414E035947FA064",
+    "netstandard20": "B64AEFA0B695369DF07494E8DF699C366812A2DC0BB8D72CE6011D5324807A08"
+  },
+  "ConsumerSha256": "3E5A179B60052A6DB88E464730A27DD2E75757E0AB575A288698AEBEC6CC5566",
+  "Phases": [
+    {
+      "Phase": "query",
+      "Cases": 54,
+      "Passed": 54,
+      "FailedOriginal": 0,
+      "OptimizedCases": 18,
+      "OptimizedSqlOperations": 0,
+      "ProvenancePassed": true
+    },
+    {
+      "Phase": "sql",
+      "Cases": 234,
+      "Passed": 232,
+      "FailedOriginal": 2,
+      "OptimizedCases": 72,
+      "OptimizedSqlOperations": 3187791,
+      "ProvenancePassed": true
+    },
+    {
+      "Phase": "diagnostics",
+      "Cases": 9,
+      "Passed": 9,
+      "FailedOriginal": 0,
+      "OptimizedCases": 3,
+      "OptimizedSqlOperations": 114425,
+      "ProvenancePassed": true
+    },
+    {
+      "Phase": "sustained",
+      "Cases": 3,
+      "Passed": 3,
+      "FailedOriginal": 0,
+      "OptimizedCases": 3,
+      "OptimizedSqlOperations": 3535279,
+      "ProvenancePassed": true
+    },
+    {
+      "Phase": "read-check",
+      "Cases": 12,
+      "Passed": 12,
+      "FailedOriginal": 0,
+      "OptimizedCases": 6,
+      "OptimizedSqlOperations": 3347301,
+      "ProvenancePassed": true
+    }
+  ],
+  "OptimizedSqlRuns": 84,
+  "OptimizedMeasuredSqlOperations": 10184796.0,
+  "FullTestAudit": {
+    "SchemaVersion": 1,
+    "AuditTimestampUtc": "2026-10-12T02:48:27.5629317Z",
+    "Passed": true,
+    "Source": "Existing optimized-tests TRX files plus current test-output/frozen-library files; no execution",
+    "Checks": [
+      "Two complete 689/689 passed runs; all 1378 individual outcomes Passed; zero NotExecuted",
+      "139 current-source SqlServerFact identities matched passed TRX results per target",
+      "14 ExpressionEvaluationIntegrityTests and17 ParameterCheckpointIntegrityTests passed per target",
+      "Current test-output libraries and frozen optimized copies match A10(net45 consumedby net462) andB64(netstandard2.0 consumedby net8.0)"
+    ],
+    "SqlClassificationMethod": "Map current frozen source [SqlServerFact] methods by namespace/class/method to TRX TestDefinition identities. SQL attributes/connection strings/library hashes are not embedded by TRX. Source method map is included for reproducibility.",
+    "RunFacts": [
+      {
+        "TargetFramework": "net462",
+        "TrxPath": "C:\\Users\\Masoud\\AppData\\Local\\Temp\\EasyDapperHighLoad-20261012\\optimized-tests\\Masoud_MASOUD-PC_2026-10-12_05_35_51.trx",
+        "TrxSha256": "EB87AC23C1E48B7F21D7A2F9A263F4938BB168D7A905AA598EC40DCE31BA28F7",
+        "RecordedStart": "2026-10-12T05:35:46.1903583+03:30",
+        "RecordedFinish": "2026-10-12T05:35:59.6946066+03:30",
+        "ResultSummaryOutcome": "Completed",
+        "Total": 689,
+        "Executed": 689,
+        "Passed": 689,
+        "Failed": 0,
+        "NotExecuted": 0,
+        "IndividualResultCount": 689,
+        "AllIndividualOutcomes": "Passed",
+        "SqlServerFactCases": 139,
+        "SqlServerFactPassed": 139,
+        "NewCaseCount": 31,
+        "NewCaseGroups": [
+          {
+            "Class": "ExpressionEvaluationIntegrityTests",
+            "Cases": 14,
+            "Passed": 14
+          },
+          {
+            "Class": "ParameterCheckpointIntegrityTests",
+            "Cases": 17,
+            "Passed": 17
+          }
+        ],
+        "TestAssemblyStorageRecordedInTrx": "g:\\projects\\easydapper\\easydapper.tests\\bin\\release\\net462\\easydapper.tests.dll",
+        "CurrentTestAssemblySha256": "F9703A5D21DBD10A6CF7CFBE1DC010415E7A57AF70367B4E8F23F46CCA052F30",
+        "CurrentTestOutputLibraryPath": "g:\\projects\\easydapper\\easydapper.tests\\bin\\release\\net462\\EasyDapper.dll",
+        "CurrentTestOutputLibrarySha256": "A10FCC656792D8E950F04A2B0CCEE69BC5C3611026BCB7B85414E035947FA064",
+        "FrozenOptimizedLibraryPath": "C:/Users/Masoud/AppData/Local/Temp/EasyDapperHighLoad-20261012/optimized/net45/EasyDapper.dll",
+        "FrozenOptimizedLibrarySha256": "A10FCC656792D8E950F04A2B0CCEE69BC5C3611026BCB7B85414E035947FA064",
+        "LibraryHashMappingMatch": true,
+        "HashProvenance": "The TRX records test-assembly storage paths but does not embed the EasyDapper library hash. Library and current test-assembly hashes were observed independently during this audit; they are not inferred as hashes captured at test execution."
+      },
+      {
+        "TargetFramework": "net8.0",
+        "TrxPath": "C:\\Users\\Masoud\\AppData\\Local\\Temp\\EasyDapperHighLoad-20261012\\optimized-tests\\Masoud_MASOUD-PC_2026-10-12_05_36_01.trx",
+        "TrxSha256": "D0AC6FA0B5CC84FAFAB44768244BC7F90D41B89E650EFCFFEF05318CB7028A26",
+        "RecordedStart": "2026-10-12T05:36:00.3499273+03:30",
+        "RecordedFinish": "2026-10-12T05:36:05.6737091+03:30",
+        "ResultSummaryOutcome": "Completed",
+        "Total": 689,
+        "Executed": 689,
+        "Passed": 689,
+        "Failed": 0,
+        "NotExecuted": 0,
+        "IndividualResultCount": 689,
+        "AllIndividualOutcomes": "Passed",
+        "SqlServerFactCases": 139,
+        "SqlServerFactPassed": 139,
+        "NewCaseCount": 31,
+        "NewCaseGroups": [
+          {
+            "Class": "ExpressionEvaluationIntegrityTests",
+            "Cases": 14,
+            "Passed": 14
+          },
+          {
+            "Class": "ParameterCheckpointIntegrityTests",
+            "Cases": 17,
+            "Passed": 17
+          }
+        ],
+        "TestAssemblyStorageRecordedInTrx": "g:\\projects\\easydapper\\easydapper.tests\\bin\\release\\net8.0\\easydapper.tests.dll",
+        "CurrentTestAssemblySha256": "A202211198769A8840906E02CDAF5C30B0545D081388D740702481FFAB789589",
+        "CurrentTestOutputLibraryPath": "g:\\projects\\easydapper\\easydapper.tests\\bin\\release\\net8.0\\EasyDapper.dll",
+        "CurrentTestOutputLibrarySha256": "B64AEFA0B695369DF07494E8DF699C366812A2DC0BB8D72CE6011D5324807A08",
+        "FrozenOptimizedLibraryPath": "C:/Users/Masoud/AppData/Local/Temp/EasyDapperHighLoad-20261012/optimized/netstandard2.0/EasyDapper.dll",
+        "FrozenOptimizedLibrarySha256": "B64AEFA0B695369DF07494E8DF699C366812A2DC0BB8D72CE6011D5324807A08",
+        "LibraryHashMappingMatch": true,
+        "HashProvenance": "The TRX records test-assembly storage paths but does not embed the EasyDapper library hash. Library and current test-assembly hashes were observed independently during this audit; they are not inferred as hashes captured at test execution."
+      }
+    ],
+    "Limitations": [
+      "This audit did not rerun tests or query SQL Server. Passed outcomes are the recorded TRX facts.",
+      "TRX does not prove a historical DLL hash; independent current output/frozen-file hashes corroborate the supplied production freeze, not a retrospective instrumentation claim.",
+      "No benchmark or production/harness source was changed."
+    ],
+    "NewTestCasesIdenticalAcrossTargets": true,
+    "NewTestCases": [
+      {
+        "Class": "ExpressionEvaluationIntegrityTests",
+        "CasesPerTarget": 14,
+        "TestNames": [
+          "EasyDapper.Tests.QueryBuilder.ExpressionEvaluationIntegrityTests.BaseDeclaredField_AcceptsCompatibleDerivedConstantReceiver",
+          "EasyDapper.Tests.QueryBuilder.ExpressionEvaluationIntegrityTests.CapturedEnumField_PreservesEnumTypeAndCurrentValue",
+          "EasyDapper.Tests.QueryBuilder.ExpressionEvaluationIntegrityTests.CapturedNullableField_PreservesNullPredicateAndBoxedUnderlyingValue",
+          "EasyDapper.Tests.QueryBuilder.ExpressionEvaluationIntegrityTests.ConstantReceiverField_PreservesPrivateAndPublicValues(privateField: False)",
+          "EasyDapper.Tests.QueryBuilder.ExpressionEvaluationIntegrityTests.ConstantReceiverField_PreservesPrivateAndPublicValues(privateField: True)",
+          "EasyDapper.Tests.QueryBuilder.ExpressionEvaluationIntegrityTests.ConstantReceiverField_RereadsValuesBetweenTranslations",
+          "EasyDapper.Tests.QueryBuilder.ExpressionEvaluationIntegrityTests.FieldRead_UsesConsumerBoundaryAndCachesItsValueWithinOneTranslation",
+          "EasyDapper.Tests.QueryBuilder.ExpressionEvaluationIntegrityTests.MethodReceiverField_PreservesReceiverSideEffectsAndPerTranslationReads",
+          "EasyDapper.Tests.QueryBuilder.ExpressionEvaluationIntegrityTests.NullConstantReceiver_KeepsTheExistingWrappedNullReferenceFailure",
+          "EasyDapper.Tests.QueryBuilder.ExpressionEvaluationIntegrityTests.PrimitiveConstantReceiver_KeepsCompiledValueAcrossConsumerBoundary",
+          "EasyDapper.Tests.QueryBuilder.ExpressionEvaluationIntegrityTests.PropertyOrMethodCallback_CanCommitNestedPredicateAndIsEvaluatedOnce(method: False)",
+          "EasyDapper.Tests.QueryBuilder.ExpressionEvaluationIntegrityTests.PropertyOrMethodCallback_CanCommitNestedPredicateAndIsEvaluatedOnce(method: True)",
+          "EasyDapper.Tests.QueryBuilder.ExpressionEvaluationIntegrityTests.StaticAndVolatileFields_KeepCurrentValueAndConsumerEvaluationBoundary",
+          "EasyDapper.Tests.QueryBuilder.ExpressionEvaluationIntegrityTests.ThrowingPropertyGetter_IsCalledOnceAndRetainsItsOriginalWrappedFailure"
+        ]
+      },
+      {
+        "Class": "ParameterCheckpointIntegrityTests",
+        "CasesPerTarget": 17,
+        "TestNames": [
+          "EasyDapper.Tests.QueryBuilder.ParameterCheckpointIntegrityTests.AWriteWithoutCheckpoint_SurvivesAnotherOwnersRollback",
+          "EasyDapper.Tests.QueryBuilder.ParameterCheckpointIntegrityTests.CommitRepeatedWrites_KeepsLatestValueAndIndependentSnapshots",
+          "EasyDapper.Tests.QueryBuilder.ParameterCheckpointIntegrityTests.FailedMerge_RestoresDestinationAndAllowsTheSameSourceToBeMergedAgain",
+          "EasyDapper.Tests.QueryBuilder.ParameterCheckpointIntegrityTests.GeneratedReservation_FollowsSurvivingWritesAfterItsOriginalOwnerRollsBack(commitSecond: False)",
+          "EasyDapper.Tests.QueryBuilder.ParameterCheckpointIntegrityTests.GeneratedReservation_FollowsSurvivingWritesAfterItsOriginalOwnerRollsBack(commitSecond: True)",
+          "EasyDapper.Tests.QueryBuilder.ParameterCheckpointIntegrityTests.InnerCommit_SurvivesOuterRollbackAndLaterOuterOverwrite(writeAfterInner: False)",
+          "EasyDapper.Tests.QueryBuilder.ParameterCheckpointIntegrityTests.InnerCommit_SurvivesOuterRollbackAndLaterOuterOverwrite(writeAfterInner: True)",
+          "EasyDapper.Tests.QueryBuilder.ParameterCheckpointIntegrityTests.InnerRollback_RestoresOuterWritesBeforeOuterCompletion(commitOuter: False)",
+          "EasyDapper.Tests.QueryBuilder.ParameterCheckpointIntegrityTests.InnerRollback_RestoresOuterWritesBeforeOuterCompletion(commitOuter: True)",
+          "EasyDapper.Tests.QueryBuilder.ParameterCheckpointIntegrityTests.NestedMixedOutcomes_KeepSuccessfulDescendantAndRemoveBothFailedAncestors",
+          "EasyDapper.Tests.QueryBuilder.ParameterCheckpointIntegrityTests.ParallelCommit_SurvivesOuterRollbackAndLaterOuterOverwrite(writeAfterChild: False)",
+          "EasyDapper.Tests.QueryBuilder.ParameterCheckpointIntegrityTests.ParallelCommit_SurvivesOuterRollbackAndLaterOuterOverwrite(writeAfterChild: True)",
+          "EasyDapper.Tests.QueryBuilder.ParameterCheckpointIntegrityTests.ParallelRollbacks_DoNotResurrectAnAlreadyFailedOwnersWrite(existingName: False, secondWrite: False)",
+          "EasyDapper.Tests.QueryBuilder.ParameterCheckpointIntegrityTests.ParallelRollbacks_DoNotResurrectAnAlreadyFailedOwnersWrite(existingName: False, secondWrite: True)",
+          "EasyDapper.Tests.QueryBuilder.ParameterCheckpointIntegrityTests.ParallelRollbacks_DoNotResurrectAnAlreadyFailedOwnersWrite(existingName: True, secondWrite: False)",
+          "EasyDapper.Tests.QueryBuilder.ParameterCheckpointIntegrityTests.ParallelRollbacks_DoNotResurrectAnAlreadyFailedOwnersWrite(existingName: True, secondWrite: True)",
+          "EasyDapper.Tests.QueryBuilder.ParameterCheckpointIntegrityTests.RollbackRepeatedWrites_RestoresOriginalReferencesAndNulls"
+        ]
+      }
+    ],
+    "SqlServerFactSourceMap": {
+      "Path": "C:/Users/Masoud/AppData/Local/Temp/EasyDapperHighLoad-20261012/TEST_SQL_METHODS.csv",
+      "Rows": 139,
+      "Sha256": "D79176ADDD2DBCF437A597ABB9E76DB36A19065D5A4EF42CA980789251DB3647"
+    }
+  },
+  "LegacyAndApi": [
+    {
+      "Runtime": "net462",
+      "BaselineEntries": 85,
+      "CurrentEntries": 87,
+      "RemovedOrChanged": 0,
+      "Additions": 2,
+      "LegacyChecks": 24,
+      "ExitCode": 0,
+      "Log": "C:\\Users\\Masoud\\AppData\\Local\\Temp\\EasyDapperHighLoad-20261012\\final-validation\\legacy\\legacy-current-net462.txt"
+    },
+    {
+      "Runtime": "net8.0",
+      "BaselineEntries": 85,
+      "CurrentEntries": 87,
+      "RemovedOrChanged": 0,
+      "Additions": 2,
+      "LegacyChecks": 24,
+      "ExitCode": 0,
+      "Log": "C:\\Users\\Masoud\\AppData\\Local\\Temp\\EasyDapperHighLoad-20261012\\final-validation\\legacy\\legacy-current-net8.0.txt"
+    }
+  ],
+  "CapturedRuntime": [
+    {
+      "Case": "net8-2.1.66",
+      "ExitCode": 0,
+      "PassedCases": 16,
+      "FailedCases": 0,
+      "OutputIdenticalToPrevious": true,
+      "LibraryHash": "B64AEFA0B695369DF07494E8DF699C366812A2DC0BB8D72CE6011D5324807A08",
+      "ConsumerHash": "B32ADAADE09B42C566311B8E5CDF27CE506BE3427F65EDF3D10F7DD3BCFAC61A",
+      "DapperProductVersion": "2.1.66+bd4f75b512",
+      "Log": "C:\\Users\\Masoud\\AppData\\Local\\Temp\\EasyDapperHighLoad-20261012\\final-validation\\captured-runtime\\net8-2.1.66.txt",
+      "ConsumerHashProvenance": "Existing executable hashes captured on Oct12 before cloning/running; no historical Oct10/11 consumer hash was recorded."
+    },
+    {
+      "Case": "net8-2.1.89",
+      "ExitCode": 0,
+      "PassedCases": 16,
+      "FailedCases": 0,
+      "OutputIdenticalToPrevious": true,
+      "LibraryHash": "B64AEFA0B695369DF07494E8DF699C366812A2DC0BB8D72CE6011D5324807A08",
+      "ConsumerHash": "4F50BDD13C1B3197540981A551AC5113C6DEDCD603934F96154A7CEB5700465B",
+      "DapperProductVersion": "2.1.89+eb47546a40",
+      "Log": "C:\\Users\\Masoud\\AppData\\Local\\Temp\\EasyDapperHighLoad-20261012\\final-validation\\captured-runtime\\net8-2.1.89.txt",
+      "ConsumerHashProvenance": "Existing executable hashes captured on Oct12 before cloning/running; no historical Oct10/11 consumer hash was recorded."
+    },
+    {
+      "Case": "net462-2.1.66",
+      "ExitCode": 0,
+      "PassedCases": 16,
+      "FailedCases": 0,
+      "OutputIdenticalToPrevious": true,
+      "LibraryHash": "A10FCC656792D8E950F04A2B0CCEE69BC5C3611026BCB7B85414E035947FA064",
+      "ConsumerHash": "F45C8A2B1176B3214E06DB7605B3ECFEDC9A920CF01FA6150E5565B3310E4F1A",
+      "DapperProductVersion": "2.1.66+bd4f75b512",
+      "Log": "C:\\Users\\Masoud\\AppData\\Local\\Temp\\EasyDapperHighLoad-20261012\\final-validation\\captured-runtime\\net462-2.1.66.txt",
+      "ConsumerHashProvenance": "Existing executable hashes captured on Oct12 before cloning/running; no historical Oct10/11 consumer hash was recorded."
+    },
+    {
+      "Case": "net462-2.1.89",
+      "ExitCode": 0,
+      "PassedCases": 16,
+      "FailedCases": 0,
+      "OutputIdenticalToPrevious": true,
+      "LibraryHash": "A10FCC656792D8E950F04A2B0CCEE69BC5C3611026BCB7B85414E035947FA064",
+      "ConsumerHash": "B5ED7E0101A8EBE534A20F961F0F740FA03C0D0DB8D259B627BB49233F1AC5B0",
+      "DapperProductVersion": "2.1.89+eb47546a40",
+      "Log": "C:\\Users\\Masoud\\AppData\\Local\\Temp\\EasyDapperHighLoad-20261012\\final-validation\\captured-runtime\\net462-2.1.89.txt",
+      "ConsumerHashProvenance": "Existing executable hashes captured on Oct12 before cloning/running; no historical Oct10/11 consumer hash was recorded."
+    }
+  ],
+  "IdentityCallbacksAndApply": [
+    {
+      "Case": "identity/net8.0/2.1.66",
+      "ExitCode": 0,
+      "PassedModesOrComparisons": 2,
+      "LibraryHash": "B64AEFA0B695369DF07494E8DF699C366812A2DC0BB8D72CE6011D5324807A08",
+      "ConsumerHash": "BAAB6BBC830B00D0C7EAC08FA449D6204984E672F14BDB5CEDCD40E00A66A355",
+      "Log": "C:\\Users\\Masoud\\AppData\\Local\\Temp\\EasyDapperHighLoad-20261012\\final-validation-complete\\runtime\\identity-net8.0-dapper-2.1.66.txt"
+    },
+    {
+      "Case": "identity/net8.0/2.1.89",
+      "ExitCode": 0,
+      "PassedModesOrComparisons": 2,
+      "LibraryHash": "B64AEFA0B695369DF07494E8DF699C366812A2DC0BB8D72CE6011D5324807A08",
+      "ConsumerHash": "EDF226D66F93F05E0D38C54C2767520621D1E3F9A3C82F565FA2B0AD35C1222D",
+      "Log": "C:\\Users\\Masoud\\AppData\\Local\\Temp\\EasyDapperHighLoad-20261012\\final-validation-complete\\runtime\\identity-net8.0-dapper-2.1.89.txt"
+    },
+    {
+      "Case": "identity/net462/2.1.66",
+      "ExitCode": 0,
+      "PassedModesOrComparisons": 2,
+      "LibraryHash": "A10FCC656792D8E950F04A2B0CCEE69BC5C3611026BCB7B85414E035947FA064",
+      "ConsumerHash": "4D0490F16345B061DD05EEBF20E45F5111D5755BC745821F7829F9E29C26E3F6",
+      "Log": "C:\\Users\\Masoud\\AppData\\Local\\Temp\\EasyDapperHighLoad-20261012\\final-validation-complete\\runtime\\identity-net462-dapper-2.1.66.txt"
+    },
+    {
+      "Case": "identity/net462/2.1.89",
+      "ExitCode": 0,
+      "PassedModesOrComparisons": 2,
+      "LibraryHash": "A10FCC656792D8E950F04A2B0CCEE69BC5C3611026BCB7B85414E035947FA064",
+      "ConsumerHash": "0BC2464D611147F7B3B192102B2F9FB18D89602C445CAE24D4DF598338339AF0",
+      "Log": "C:\\Users\\Masoud\\AppData\\Local\\Temp\\EasyDapperHighLoad-20261012\\final-validation-complete\\runtime\\identity-net462-dapper-2.1.89.txt"
+    },
+    {
+      "Case": "native-callback/net8.0/2.1.66",
+      "ExitCode": 0,
+      "PassedModesOrComparisons": 6,
+      "LibraryHash": "B64AEFA0B695369DF07494E8DF699C366812A2DC0BB8D72CE6011D5324807A08",
+      "ConsumerHash": "40B34483956D31278303ABE000A025CE9378D231F2AE6538C9AD84B0E90E0034",
+      "Log": "C:\\Users\\Masoud\\AppData\\Local\\Temp\\EasyDapperHighLoad-20261012\\final-validation-complete\\runtime\\native-callback-net8.0-dapper-2.1.66.txt"
+    },
+    {
+      "Case": "native-callback/net8.0/2.1.89",
+      "ExitCode": 0,
+      "PassedModesOrComparisons": 6,
+      "LibraryHash": "B64AEFA0B695369DF07494E8DF699C366812A2DC0BB8D72CE6011D5324807A08",
+      "ConsumerHash": "B85CDDD3478CCC25523DD1D610F605F8AF65C546FE5DFFC7601126245974BE0E",
+      "Log": "C:\\Users\\Masoud\\AppData\\Local\\Temp\\EasyDapperHighLoad-20261012\\final-validation-complete\\runtime\\native-callback-net8.0-dapper-2.1.89.txt"
+    },
+    {
+      "Case": "native-callback/net462/2.1.66",
+      "ExitCode": 0,
+      "PassedModesOrComparisons": 6,
+      "LibraryHash": "A10FCC656792D8E950F04A2B0CCEE69BC5C3611026BCB7B85414E035947FA064",
+      "ConsumerHash": "F0FA771AC8075DE8AB2F58C00A610C45A5633BB3F223252E793287C9E760BD8D",
+      "Log": "C:\\Users\\Masoud\\AppData\\Local\\Temp\\EasyDapperHighLoad-20261012\\final-validation-complete\\runtime\\native-callback-net462-dapper-2.1.66.txt"
+    },
+    {
+      "Case": "native-callback/net462/2.1.89",
+      "ExitCode": 0,
+      "PassedModesOrComparisons": 6,
+      "LibraryHash": "A10FCC656792D8E950F04A2B0CCEE69BC5C3611026BCB7B85414E035947FA064",
+      "ConsumerHash": "0B0F51C0FE4BE170CB49489408B3B5248CDB32D2AD76936B7DFA13D05D57758F",
+      "Log": "C:\\Users\\Masoud\\AppData\\Local\\Temp\\EasyDapperHighLoad-20261012\\final-validation-complete\\runtime\\native-callback-net462-dapper-2.1.89.txt"
+    },
+    {
+      "Case": "APPLY/Scope",
+      "ExitCode": 0,
+      "PassedModesOrComparisons": 1,
+      "LibraryHash": "B64AEFA0B695369DF07494E8DF699C366812A2DC0BB8D72CE6011D5324807A08",
+      "ConsumerHash": "B2F972479DB2233DCF4103172B8FAB9C958F26A104558BFF46DBC2D020CCA577",
+      "Log": "C:\\Users\\Masoud\\AppData\\Local\\Temp\\EasyDapperHighLoad-20261012\\final-validation-complete\\runtime\\apply-Scope.txt"
+    },
+    {
+      "Case": "APPLY/Review",
+      "ExitCode": 0,
+      "PassedModesOrComparisons": 3,
+      "LibraryHash": "B64AEFA0B695369DF07494E8DF699C366812A2DC0BB8D72CE6011D5324807A08",
+      "ConsumerHash": "578185CB8741AD4C6CD3EDFAAB1FD6ABAE85F0ED7CA09FDF8A95D495BB92B8C4",
+      "Log": "C:\\Users\\Masoud\\AppData\\Local\\Temp\\EasyDapperHighLoad-20261012\\final-validation-complete\\runtime\\apply-Review.txt"
+    }
+  ],
+  "MainSqlByLabel": [
+    {
+      "Label": "before",
+      "Cases": 72,
+      "Passed": 72,
+      "Success": 3025741.0,
+      "Reads": 2492711.0,
+      "Updates": 533030.0,
+      "Errors": 0.0,
+      "WarmupErrors": 0.0,
+      "WarmupSuccess": 475387.0
+    },
+    {
+      "Label": "optimized",
+      "Cases": 72,
+      "Passed": 72,
+      "Success": 3187791.0,
+      "Reads": 2626052.0,
+      "Updates": 561739.0,
+      "Errors": 0.0,
+      "WarmupErrors": 0.0,
+      "WarmupSuccess": 502902.0
+    },
+    {
+      "Label": "dapper",
+      "Cases": 72,
+      "Passed": 72,
+      "Success": 5895232.0,
+      "Reads": 5146603.0,
+      "Updates": 748629.0,
+      "Errors": 0.0,
+      "WarmupErrors": 0.0,
+      "WarmupSuccess": 865187.0
+    },
+    {
+      "Label": "original",
+      "Cases": 18,
+      "Passed": 16,
+      "Success": 846717.0,
+      "Reads": 714309.0,
+      "Updates": 132408.0,
+      "Errors": 320.0,
+      "WarmupErrors": 320.0,
+      "WarmupSuccess": 127138.0
+    }
+  ],
+  "LongerRuns": [
+    {
+      "Case": "sustained-shared-read-c1-w256-optimized-r1",
+      "Passed": true,
+      "Workers": 256,
+      "DispatchSeconds": 120,
+      "WallSeconds": 120.070814,
+      "Success": 501602,
+      "Reads": 501602,
+      "Updates": 0,
+      "Errors": 0,
+      "WarmupErrors": 0,
+      "Rps": 4177.55142394554,
+      "P95": 72.192,
+      "P99": 79.36,
+      "Correctness": true,
+      "MissingRows": 0,
+      "Drained": true,
+      "DrainTimeout": false,
+      "Dropped": true,
+      "CleanupError": null,
+      "PeakWorkingSet": 114200576,
+      "FinalWorkingSet": 105017344,
+      "Gen2": 42,
+      "AllocatedPerOp": 14497.199484850538,
+      "LibraryHash": "B64AEFA0B695369DF07494E8DF699C366812A2DC0BB8D72CE6011D5324807A08",
+      "ConsumerHash": "3E5A179B60052A6DB88E464730A27DD2E75757E0AB575A288698AEBEC6CC5566"
+    },
+    {
+      "Case": "sustained-local-mixed-c1-w256-optimized-r1",
+      "Passed": true,
+      "Workers": 256,
+      "DispatchSeconds": 120,
+      "WallSeconds": 120.0134082,
+      "Success": 2816668,
+      "Reads": 1408363,
+      "Updates": 1408305,
+      "Errors": 0,
+      "WarmupErrors": 0,
+      "Rps": 23469.610956353124,
+      "P95": 21.632,
+      "P99": 26.112,
+      "Correctness": true,
+      "MissingRows": 0,
+      "Drained": true,
+      "DrainTimeout": false,
+      "Dropped": true,
+      "CleanupError": null,
+      "PeakWorkingSet": 125001728,
+      "FinalWorkingSet": 106565632,
+      "Gen2": 133,
+      "AllocatedPerOp": 11853.590102915927,
+      "LibraryHash": "B64AEFA0B695369DF07494E8DF699C366812A2DC0BB8D72CE6011D5324807A08",
+      "ConsumerHash": "3E5A179B60052A6DB88E464730A27DD2E75757E0AB575A288698AEBEC6CC5566"
+    },
+    {
+      "Case": "sustained-local-query-c64-w256-optimized-r1",
+      "Passed": true,
+      "Workers": 256,
+      "DispatchSeconds": 120,
+      "WallSeconds": 120.0227844,
+      "Success": 217009,
+      "Reads": 217009,
+      "Updates": 0,
+      "Errors": 0,
+      "WarmupErrors": 0,
+      "Rps": 1808.065036024943,
+      "P95": 168.96,
+      "P99": 211.968,
+      "Correctness": true,
+      "MissingRows": 0,
+      "Drained": true,
+      "DrainTimeout": false,
+      "Dropped": true,
+      "CleanupError": null,
+      "PeakWorkingSet": 210661376,
+      "FinalWorkingSet": 179007488,
+      "Gen2": 581,
+      "AllocatedPerOp": 274133.5169324775,
+      "LibraryHash": "B64AEFA0B695369DF07494E8DF699C366812A2DC0BB8D72CE6011D5324807A08",
+      "ConsumerHash": "3E5A179B60052A6DB88E464730A27DD2E75757E0AB575A288698AEBEC6CC5566"
+    }
+  ],
+  "BasicReadFollowup": [
+    {
+      "Workers": 16,
+      "Label": "before",
+      "Runs": 3,
+      "MedianRps": 27296.242750852216,
+      "MinimumRps": 26582.994814153306,
+      "MaximumRps": 28119.46028634305,
+      "MedianP95": 2.432,
+      "MedianP99": 3.088,
+      "Success": 1640536.0,
+      "Errors": 0.0
+    },
+    {
+      "Workers": 16,
+      "Label": "optimized",
+      "Runs": 3,
+      "MedianRps": 27850.056587592142,
+      "MinimumRps": 24757.987180901295,
+      "MaximumRps": 27981.331077432547,
+      "MedianP95": 2.4,
+      "MedianP99": 2.992,
+      "Success": 1612288.0,
+      "Errors": 0.0
+    },
+    {
+      "Workers": 64,
+      "Label": "before",
+      "Runs": 3,
+      "MedianRps": 28939.823309791107,
+      "MinimumRps": 26827.069640732418,
+      "MaximumRps": 29857.629876473085,
+      "MedianP95": 5.568,
+      "MedianP99": 6.56,
+      "Success": 1713167.0,
+      "Errors": 0.0
+    },
+    {
+      "Workers": 64,
+      "Label": "optimized",
+      "Runs": 3,
+      "MedianRps": 29697.308286079053,
+      "MinimumRps": 27200.202673878448,
+      "MaximumRps": 29804.49513237267,
+      "MedianP95": 5.568,
+      "MedianP99": 6.432,
+      "Success": 1735013.0,
+      "Errors": 0.0
+    }
+  ],
+  "Diagnostics": [
+    {
+      "Case": "diagnostics-shared-read-c1-w128-before-r1",
+      "Passed": true,
+      "PublicCalls": 17898,
+      "Before": 17898,
+      "End": 17898,
+      "MissingEnd": 0,
+      "CallsWithoutBefore": 0,
+      "MissingIds": 0,
+      "DuplicateIds": 0,
+      "UnmatchedEnd": 0,
+      "Errors": 0,
+      "EndAfterPublicReturn": 4,
+      "PreP95": 51.712,
+      "ProviderP95": 0.35,
+      "OperationP95": 52.224,
+      "LibraryHash": "665FD1FE50EF51D45CBF5C09E316D95D776BCA34C0DD9A033FA96DE991F180A9",
+      "ConsumerHash": "3E5A179B60052A6DB88E464730A27DD2E75757E0AB575A288698AEBEC6CC5566"
+    },
+    {
+      "Case": "diagnostics-shared-read-c1-w128-optimized-r1",
+      "Passed": true,
+      "PublicCalls": 18052,
+      "Before": 18052,
+      "End": 18052,
+      "MissingEnd": 0,
+      "CallsWithoutBefore": 0,
+      "MissingIds": 0,
+      "DuplicateIds": 0,
+      "UnmatchedEnd": 0,
+      "Errors": 0,
+      "EndAfterPublicReturn": 2,
+      "PreP95": 50.176,
+      "ProviderP95": 0.342,
+      "OperationP95": 50.432,
+      "LibraryHash": "B64AEFA0B695369DF07494E8DF699C366812A2DC0BB8D72CE6011D5324807A08",
+      "ConsumerHash": "3E5A179B60052A6DB88E464730A27DD2E75757E0AB575A288698AEBEC6CC5566"
+    },
+    {
+      "Case": "diagnostics-shared-read-c1-w128-dapper-r1",
+      "Passed": true,
+      "PublicCalls": 21831,
+      "Before": 21831,
+      "End": 21831,
+      "MissingEnd": 0,
+      "CallsWithoutBefore": 0,
+      "MissingIds": 0,
+      "DuplicateIds": 0,
+      "UnmatchedEnd": 0,
+      "Errors": 0,
+      "EndAfterPublicReturn": 2,
+      "PreP95": 35.84,
+      "ProviderP95": 0.274,
+      "OperationP95": 36.096,
+      "LibraryHash": "B64AEFA0B695369DF07494E8DF699C366812A2DC0BB8D72CE6011D5324807A08",
+      "ConsumerHash": "3E5A179B60052A6DB88E464730A27DD2E75757E0AB575A288698AEBEC6CC5566"
+    },
+    {
+      "Case": "diagnostics-local-read-c1-w128-before-r1",
+      "Passed": true,
+      "PublicCalls": 86293,
+      "Before": 86293,
+      "End": 86293,
+      "MissingEnd": 0,
+      "CallsWithoutBefore": 0,
+      "MissingIds": 0,
+      "DuplicateIds": 0,
+      "UnmatchedEnd": 0,
+      "Errors": 0,
+      "EndAfterPublicReturn": 33,
+      "PreP95": 0.102,
+      "ProviderP95": 12.416,
+      "OperationP95": 12.672,
+      "LibraryHash": "665FD1FE50EF51D45CBF5C09E316D95D776BCA34C0DD9A033FA96DE991F180A9",
+      "ConsumerHash": "3E5A179B60052A6DB88E464730A27DD2E75757E0AB575A288698AEBEC6CC5566"
+    },
+    {
+      "Case": "diagnostics-local-read-c1-w128-optimized-r1",
+      "Passed": true,
+      "PublicCalls": 90288,
+      "Before": 90288,
+      "End": 90288,
+      "MissingEnd": 0,
+      "CallsWithoutBefore": 0,
+      "MissingIds": 0,
+      "DuplicateIds": 0,
+      "UnmatchedEnd": 0,
+      "Errors": 0,
+      "EndAfterPublicReturn": 35,
+      "PreP95": 0.1,
+      "ProviderP95": 12.352,
+      "OperationP95": 12.544,
+      "LibraryHash": "B64AEFA0B695369DF07494E8DF699C366812A2DC0BB8D72CE6011D5324807A08",
+      "ConsumerHash": "3E5A179B60052A6DB88E464730A27DD2E75757E0AB575A288698AEBEC6CC5566"
+    },
+    {
+      "Case": "diagnostics-local-read-c1-w128-dapper-r1",
+      "Passed": true,
+      "PublicCalls": 154688,
+      "Before": 154688,
+      "End": 154688,
+      "MissingEnd": 0,
+      "CallsWithoutBefore": 0,
+      "MissingIds": 0,
+      "DuplicateIds": 0,
+      "UnmatchedEnd": 0,
+      "Errors": 0,
+      "EndAfterPublicReturn": 146,
+      "PreP95": 0.012,
+      "ProviderP95": 7.712,
+      "OperationP95": 7.744,
+      "LibraryHash": "B64AEFA0B695369DF07494E8DF699C366812A2DC0BB8D72CE6011D5324807A08",
+      "ConsumerHash": "3E5A179B60052A6DB88E464730A27DD2E75757E0AB575A288698AEBEC6CC5566"
+    },
+    {
+      "Case": "diagnostics-local-query-c64-w128-before-r1",
+      "Passed": true,
+      "PublicCalls": 1664,
+      "Before": 1664,
+      "End": 1664,
+      "MissingEnd": 0,
+      "CallsWithoutBefore": 0,
+      "MissingIds": 0,
+      "DuplicateIds": 0,
+      "UnmatchedEnd": 0,
+      "Errors": 0,
+      "EndAfterPublicReturn": 0,
+      "PreP95": 101.888,
+      "ProviderP95": 376.832,
+      "OperationP95": 442.368,
+      "LibraryHash": "665FD1FE50EF51D45CBF5C09E316D95D776BCA34C0DD9A033FA96DE991F180A9",
+      "ConsumerHash": "3E5A179B60052A6DB88E464730A27DD2E75757E0AB575A288698AEBEC6CC5566"
+    },
+    {
+      "Case": "diagnostics-local-query-c64-w128-optimized-r1",
+      "Passed": true,
+      "PublicCalls": 6085,
+      "Before": 6085,
+      "End": 6085,
+      "MissingEnd": 0,
+      "CallsWithoutBefore": 0,
+      "MissingIds": 0,
+      "DuplicateIds": 0,
+      "UnmatchedEnd": 0,
+      "Errors": 0,
+      "EndAfterPublicReturn": 0,
+      "PreP95": 26.368,
+      "ProviderP95": 114.688,
+      "OperationP95": 128.512,
+      "LibraryHash": "B64AEFA0B695369DF07494E8DF699C366812A2DC0BB8D72CE6011D5324807A08",
+      "ConsumerHash": "3E5A179B60052A6DB88E464730A27DD2E75757E0AB575A288698AEBEC6CC5566"
+    },
+    {
+      "Case": "diagnostics-local-query-c64-w128-dapper-r1",
+      "Passed": true,
+      "PublicCalls": 16538,
+      "Before": 16538,
+      "End": 16538,
+      "MissingEnd": 0,
+      "CallsWithoutBefore": 0,
+      "MissingIds": 0,
+      "DuplicateIds": 0,
+      "UnmatchedEnd": 0,
+      "Errors": 0,
+      "EndAfterPublicReturn": 1,
+      "PreP95": 9.664,
+      "ProviderP95": 47.36,
+      "OperationP95": 49.92,
+      "LibraryHash": "B64AEFA0B695369DF07494E8DF699C366812A2DC0BB8D72CE6011D5324807A08",
+      "ConsumerHash": "3E5A179B60052A6DB88E464730A27DD2E75757E0AB575A288698AEBEC6CC5566"
+    }
+  ],
+  "SourceHashesAtCompletion": [
+    {
+      "Path": "EasyDapper/QueryBuilding/ParameterBuilder.cs",
+      "Sha256": "C4CC7B845586F8F5927DD16B060C6386EE3962E6301B572F19B151CBCACF1AC3"
+    },
+    {
+      "Path": "EasyDapper/QueryBuilding/ExpressionParser.cs",
+      "Sha256": "995840C0083AA697202C925B4E2DECA5D3EA36059DD566E8808979666A1BBC50"
+    },
+    {
+      "Path": "EasyDapper/QueryBuilding/QueryBuilderCore.cs",
+      "Sha256": "FDD2B05809A29B1F8527ADF785CBEDD17903559BB4295E6B3FE595F20E9FA935"
+    },
+    {
+      "Path": "EasyDapper/Transactions/ConnectionManager.cs",
+      "Sha256": "8CB6E86B9C9F3DAC18ADF0D10D167C04E18A715552515091424EE52F4CF0D0FC"
+    },
+    {
+      "Path": "EasyDapper/Sql/SqlBuilder.cs",
+      "Sha256": "88D7B2E882B14A7888E748971BE31F281DD89E3CC4DBCDF6AE284DEDD5DE5B30"
+    },
+    {
+      "Path": "EasyDapper.LoadTests/QueryBuildBenchmark.cs",
+      "Sha256": "C8EA4D97B1F2B71B856E6D10F9DE355026431E335B49A4ACB2015183433BE3C6"
+    },
+    {
+      "Path": "EasyDapper.LoadTests/SqlBenchmark.cs",
+      "Sha256": "7B660C1580AC3D15BC27EB5013F2E2B7CB16AF18F72A27C173D4F6DCDC1FB797"
+    },
+    {
+      "Path": "EasyDapper.LoadTests/RunComparison.ps1",
+      "Sha256": "11D252902F088520895847DFBB7B0310B5642A153B01BD1464E599D6CB2211CC"
+    }
+  ],
+  "Limits": [
+    "Performance measured on .NET8 only; Framework correctness executed on installed4.8.1.",
+    "Closed-loop local hot-table synthetic workloads; no3000-application or productionp99 certification.",
+    "Captured-CRUD consumer hashes were first recordedOct12; historicalhashes were unavailable.",
+    "Allocation and GC remain material; two-minute runs do not establish multi-hour memory stability."
+  ]
+}
